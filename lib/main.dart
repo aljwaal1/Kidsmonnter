@@ -43,6 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
   int _usedSeconds = 0;
   bool _enabled = false;
   bool _overlayAllowed = false;
+  bool _hasPin = false;
   bool _loading = true;
   Timer? _refreshTimer;
 
@@ -71,75 +72,159 @@ class _HomeScreenState extends State<HomeScreen> {
         _enabled = status['enabled'] == true;
         _usedSeconds = (status['usedSeconds'] as num?)?.toInt() ?? 0;
         _dailyMinutes = (status['dailyMinutes'] as num?)?.toInt() ?? 60;
+        _hasPin = status['hasPin'] == true;
         _overlayAllowed = overlay;
         _loading = false;
       });
     } on PlatformException catch (error) {
       if (!silent && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('تعذر قراءة حالة الحماية: ${error.message ?? ''}')),
-        );
+        _message('تعذر قراءة حالة الحماية: ${error.message ?? ''}');
       }
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  Future<void> _setProtection(bool value) async {
-    if (value && !_overlayAllowed) {
-      await _channel.invokeMethod('openOverlaySettings');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('فعّل السماح بالظهور فوق التطبيقات، ثم ارجع واضغط تفعيل.'),
-          ),
-        );
-      }
-      return;
-    }
-
-    try {
-      if (value) {
-        await _channel.invokeMethod('startProtection', {'minutes': _dailyMinutes});
-      } else {
-        await _channel.invokeMethod('stopProtection');
-      }
-      await _loadStatus();
-    } on PlatformException catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('لم يتم تنفيذ الطلب: ${error.message ?? ''}')),
-      );
-    }
+  void _message(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(text)));
   }
 
-  Future<void> _changeDuration(int minutes) async {
-    if (_enabled) {
-      final approved = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('تغيير الوقت اليومي'),
-          content: const Text(
-            'سيتم تطبيق المدة الجديدة فورًا. الوقت المستخدم اليوم لن يُحذف.',
+  Future<String?> _askPin({required String title, bool confirm = false}) async {
+    final first = TextEditingController();
+    final second = TextEditingController();
+    String? error;
+
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(title),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: first,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                obscureText: true,
+                maxLength: 6,
+                textDirection: TextDirection.ltr,
+                decoration: const InputDecoration(
+                  labelText: 'PIN من 6 أرقام',
+                  counterText: '',
+                ),
+              ),
+              if (confirm) ...[
+                const SizedBox(height: 10),
+                TextField(
+                  controller: second,
+                  keyboardType: TextInputType.number,
+                  obscureText: true,
+                  maxLength: 6,
+                  textDirection: TextDirection.ltr,
+                  decoration: const InputDecoration(
+                    labelText: 'تأكيد PIN',
+                    counterText: '',
+                  ),
+                ),
+              ],
+              if (error != null) ...[
+                const SizedBox(height: 10),
+                Text(error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              ],
+            ],
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context, false),
+              onPressed: () => Navigator.pop(context),
               child: const Text('إلغاء'),
             ),
             FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('تطبيق'),
+              onPressed: () {
+                final pin = first.text.trim();
+                if (pin.length != 6 || int.tryParse(pin) == null) {
+                  setDialogState(() => error = 'أدخل 6 أرقام صحيحة.');
+                  return;
+                }
+                if (confirm && pin != second.text.trim()) {
+                  setDialogState(() => error = 'الرمزان غير متطابقين.');
+                  return;
+                }
+                Navigator.pop(context, pin);
+              },
+              child: const Text('متابعة'),
             ),
           ],
         ),
-      );
-      if (approved != true) return;
-    }
+      ),
+    );
+  }
 
+  Future<bool> _ensurePin() async {
+    if (_hasPin) return true;
+    final pin = await _askPin(title: 'إنشاء رمز ولي الأمر', confirm: true);
+    if (pin == null) return false;
+    try {
+      await _channel.invokeMethod('setPin', {'pin': pin});
+      await _loadStatus();
+      _message('تم حفظ رمز ولي الأمر.');
+      return true;
+    } on PlatformException catch (error) {
+      _message(error.message ?? 'تعذر حفظ الرمز.');
+      return false;
+    }
+  }
+
+  Future<void> _setProtection(bool value) async {
+    if (value) {
+      if (!await _ensurePin()) return;
+      if (!_overlayAllowed) {
+        await _channel.invokeMethod('openOverlaySettings');
+        _message('فعّل الظهور فوق التطبيقات، ثم ارجع واضغط تفعيل.');
+        return;
+      }
+      await _channel.invokeMethod('startProtection', {'minutes': _dailyMinutes});
+    } else {
+      final pin = await _askPin(title: 'إيقاف الحماية');
+      if (pin == null) return;
+      try {
+        await _channel.invokeMethod('stopProtection', {'pin': pin});
+      } on PlatformException {
+        _message('رمز ولي الأمر غير صحيح.');
+        return;
+      }
+    }
+    await _loadStatus();
+  }
+
+  Future<void> _changeDuration(int minutes) async {
+    if (!await _ensurePin()) return;
+    final pin = await _askPin(title: 'تأكيد تغيير المدة');
+    if (pin == null) return;
+    final verified = await _channel.invokeMethod<bool>('verifyPin', {'pin': pin}) ?? false;
+    if (!verified) {
+      _message('رمز ولي الأمر غير صحيح.');
+      return;
+    }
     setState(() => _dailyMinutes = minutes);
     if (_enabled) {
       await _channel.invokeMethod('startProtection', {'minutes': minutes});
       await _loadStatus();
+    }
+  }
+
+  Future<void> _addTime(int minutes) async {
+    final pin = await _askPin(title: 'إضافة $minutes دقيقة');
+    if (pin == null) return;
+    try {
+      await _channel.invokeMethod('addTime', {'pin': pin, 'minutes': minutes});
+      await _loadStatus();
+      _message('تمت إضافة $minutes دقيقة.');
+    } on PlatformException {
+      _message('رمز ولي الأمر غير صحيح.');
     }
   }
 
@@ -247,11 +332,20 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 22),
-            const Text(
-              'المدة اليومية',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            const SizedBox(height: 18),
+            Card(
+              child: ListTile(
+                leading: Icon(_hasPin ? Icons.lock : Icons.lock_open),
+                title: Text(_hasPin ? 'رمز ولي الأمر محفوظ' : 'أنشئ رمز ولي الأمر'),
+                subtitle: const Text('مطلوب لإيقاف الحماية أو تغيير المدة أو فتح القفل.'),
+                trailing: FilledButton.tonal(
+                  onPressed: _ensurePin,
+                  child: Text(_hasPin ? 'تغيير لاحقًا' : 'إنشاء'),
+                ),
+              ),
             ),
+            const SizedBox(height: 18),
+            const Text('المدة اليومية', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
             Wrap(
               spacing: 10,
@@ -264,7 +358,30 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               }).toList(),
             ),
-            const SizedBox(height: 22),
+            const SizedBox(height: 18),
+            if (_enabled)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('إضافة وقت', style: TextStyle(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        children: [10, 15, 30, 60]
+                            .map((minutes) => OutlinedButton(
+                                  onPressed: () => _addTime(minutes),
+                                  child: Text('+$minutes دقيقة'),
+                                ))
+                            .toList(),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            const SizedBox(height: 18),
             Card(
               child: ListTile(
                 leading: Icon(
@@ -274,31 +391,13 @@ class _HomeScreenState extends State<HomeScreen> {
                 title: Text(
                   _overlayAllowed ? 'صلاحية شاشة القفل مفعّلة' : 'صلاحية شاشة القفل مطلوبة',
                 ),
-                subtitle: const Text(
-                  'هذه الصلاحية ضرورية لإظهار شاشة انتهاء الوقت فوق جميع التطبيقات.',
-                ),
+                subtitle: const Text('ضرورية لإظهار شاشة انتهاء الوقت فوق جميع التطبيقات.'),
                 trailing: _overlayAllowed
                     ? null
                     : FilledButton.tonal(
                         onPressed: () => _channel.invokeMethod('openOverlaySettings'),
                         child: const Text('تفعيل'),
                       ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Card(
-              child: ListTile(
-                leading: Icon(Icons.notifications_active_outlined),
-                title: Text('تنبيهات تلقائية'),
-                subtitle: Text('تنبيه قبل 5 دقائق، وتنبيه أخير قبل دقيقة.'),
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Card(
-              child: ListTile(
-                leading: Icon(Icons.restart_alt),
-                title: Text('يعمل بعد إعادة التشغيل'),
-                subtitle: Text('تعود خدمة الحماية تلقائيًا إذا كانت مفعّلة.'),
               ),
             ),
           ],
