@@ -12,9 +12,16 @@
 
         <activity
             android:name=".LockActivity"
+            android:alwaysRetainTaskState="true"
+            android:clearTaskOnLaunch="false"
             android:excludeFromRecents="true"
             android:exported="false"
+            android:finishOnTaskLaunch="false"
+            android:immersive="true"
             android:launchMode="singleTask"
+            android:lockTaskMode="if_whitelisted"
+            android:resizeableActivity="false"
+            android:screenOrientation="portrait"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:theme="@style/LaunchTheme" />
