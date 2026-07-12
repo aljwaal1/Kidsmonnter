@@ -3,6 +3,7 @@ package com.explapp.kidstimeguard
 import android.app.*
 import android.content.*
 import android.graphics.Color
+import android.net.Uri
 import android.os.*
 import android.provider.Settings
 import android.text.InputType
@@ -18,7 +19,10 @@ import java.util.*
 
 private const val PREFS_NAME = "kidsmonnter"
 private const val FAILED_ATTEMPTS_KEY = "failed_pin_attempts"
+private const val PARENT_EMAIL_KEY = "parent_email"
+private const val DEFAULT_PARENT_EMAIL = "yaya15112016@gmail.com"
 private const val MAX_FAILED_ATTEMPTS = 50
+private const val ALERT_CHANNEL_ID = "kidsmonnter_security_alerts"
 
 class MainActivity : FlutterActivity() {
     private val channel = "kidsmonnter/control"
@@ -38,10 +42,24 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "hasPin" -> result.success((prefs.getString("parent_pin", "") ?: "").length == 6)
+                "setParentEmail" -> {
+                    val email = call.argument<String>("email")?.trim().orEmpty()
+                    if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
+                        result.error("INVALID_EMAIL", "عنوان البريد الإلكتروني غير صحيح", null)
+                    } else {
+                        prefs.edit().putString(PARENT_EMAIL_KEY, email).apply()
+                        result.success(true)
+                    }
+                }
+                "getParentEmail" -> result.success(parentEmail(prefs))
+                "sendSecurityReport" -> {
+                    openSecurityEmail(this, prefs, "تقرير محاولات PIN")
+                    result.success(true)
+                }
                 "verifyPin" -> {
                     val pin = call.argument<String>("pin") ?: ""
                     val valid = pin == prefs.getString("parent_pin", "")
-                    if (!valid) recordFailedAttempt(prefs, "تغيير المدة")
+                    if (!valid) recordFailedAttempt(this, prefs, "تغيير المدة")
                     result.success(valid)
                 }
                 "startProtection" -> {
@@ -57,7 +75,7 @@ class MainActivity : FlutterActivity() {
                 "stopProtection" -> {
                     val pin = call.argument<String>("pin") ?: ""
                     if (pin != prefs.getString("parent_pin", "")) {
-                        recordFailedAttempt(prefs, "إيقاف الحماية")
+                        recordFailedAttempt(this, prefs, "إيقاف الحماية")
                         result.error("WRONG_PIN", "رمز ولي الأمر غير صحيح", null)
                     } else {
                         prefs.edit().putBoolean("enabled", false).apply()
@@ -69,7 +87,7 @@ class MainActivity : FlutterActivity() {
                     val pin = call.argument<String>("pin") ?: ""
                     val minutes = call.argument<Int>("minutes") ?: 0
                     if (pin != prefs.getString("parent_pin", "")) {
-                        recordFailedAttempt(prefs, "إضافة وقت")
+                        recordFailedAttempt(this, prefs, "إضافة وقت")
                         result.error("WRONG_PIN", "رمز ولي الأمر غير صحيح", null)
                     } else {
                         val used = prefs.getInt("used_seconds", 0)
@@ -81,7 +99,7 @@ class MainActivity : FlutterActivity() {
                 "clearFailedAttempts" -> {
                     val pin = call.argument<String>("pin") ?: ""
                     if (pin != prefs.getString("parent_pin", "")) {
-                        recordFailedAttempt(prefs, "مسح سجل المحاولات")
+                        recordFailedAttempt(this, prefs, "مسح سجل المحاولات")
                         result.error("WRONG_PIN", "رمز ولي الأمر غير صحيح", null)
                     } else {
                         prefs.edit().remove(FAILED_ATTEMPTS_KEY).apply()
@@ -93,10 +111,11 @@ class MainActivity : FlutterActivity() {
                     "usedSeconds" to prefs.getInt("used_seconds", 0),
                     "dailyMinutes" to prefs.getInt("daily_minutes", 60),
                     "hasPin" to ((prefs.getString("parent_pin", "") ?: "").length == 6),
-                    "failedAttempts" to readFailedAttempts(prefs).size
+                    "failedAttempts" to readFailedAttempts(prefs).size,
+                    "parentEmail" to parentEmail(prefs)
                 ))
                 "openOverlaySettings" -> {
-                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName")))
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
                     result.success(true)
                 }
                 "canDrawOverlays" -> result.success(Settings.canDrawOverlays(this))
@@ -111,7 +130,10 @@ private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(D
 private fun attemptTimestamp(): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
 
-private fun recordFailedAttempt(prefs: android.content.SharedPreferences, source: String) {
+private fun parentEmail(prefs: SharedPreferences): String =
+    prefs.getString(PARENT_EMAIL_KEY, DEFAULT_PARENT_EMAIL).orEmpty().ifBlank { DEFAULT_PARENT_EMAIL }
+
+private fun recordFailedAttempt(context: Context, prefs: SharedPreferences, source: String) {
     val entries = prefs.getString(FAILED_ATTEMPTS_KEY, "")
         .orEmpty()
         .lineSequence()
@@ -120,9 +142,10 @@ private fun recordFailedAttempt(prefs: android.content.SharedPreferences, source
     entries.add("${attemptTimestamp()}|$source")
     val trimmed = entries.takeLast(MAX_FAILED_ATTEMPTS)
     prefs.edit().putString(FAILED_ATTEMPTS_KEY, trimmed.joinToString("\n")).apply()
+    showSecurityAlert(context, prefs, source)
 }
 
-private fun readFailedAttempts(prefs: android.content.SharedPreferences): List<Map<String, String>> =
+private fun readFailedAttempts(prefs: SharedPreferences): List<Map<String, String>> =
     prefs.getString(FAILED_ATTEMPTS_KEY, "")
         .orEmpty()
         .lineSequence()
@@ -133,6 +156,75 @@ private fun readFailedAttempts(prefs: android.content.SharedPreferences): List<M
         }
         .toList()
         .asReversed()
+
+private fun securityReportBody(prefs: SharedPreferences): String {
+    val attempts = readFailedAttempts(prefs)
+    if (attempts.isEmpty()) return "لا توجد محاولات PIN فاشلة مسجلة."
+    return buildString {
+        appendLine("تقرير حارس وقت الأطفال")
+        appendLine("عدد المحاولات: ${attempts.size}")
+        appendLine()
+        attempts.forEachIndexed { index, item ->
+            appendLine("${index + 1}. ${item["time"]} - ${item["source"]}")
+        }
+    }
+}
+
+private fun emailIntent(prefs: SharedPreferences, subject: String): Intent =
+    Intent(Intent.ACTION_SENDTO).apply {
+        data = Uri.parse("mailto:")
+        putExtra(Intent.EXTRA_EMAIL, arrayOf(parentEmail(prefs)))
+        putExtra(Intent.EXTRA_SUBJECT, subject)
+        putExtra(Intent.EXTRA_TEXT, securityReportBody(prefs))
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+private fun openSecurityEmail(context: Context, prefs: SharedPreferences, subject: String) {
+    val intent = emailIntent(prefs, subject)
+    try {
+        context.startActivity(intent)
+    } catch (_: ActivityNotFoundException) {
+        Toast.makeText(context, "لا يوجد تطبيق بريد إلكتروني مثبت", Toast.LENGTH_LONG).show()
+    }
+}
+
+private fun showSecurityAlert(context: Context, prefs: SharedPreferences, source: String) {
+    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        manager.createNotificationChannel(
+            NotificationChannel(
+                ALERT_CHANNEL_ID,
+                "تنبيهات محاولات PIN",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "تنبيه عند إدخال رمز ولي الأمر بشكل خاطئ"
+            }
+        )
+    }
+
+    val intent = emailIntent(prefs, "تنبيه أمني: محاولة PIN فاشلة")
+    val pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT or
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+    val pendingIntent = PendingIntent.getActivity(
+        context,
+        (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+        intent,
+        pendingFlags
+    )
+
+    val notification = NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
+        .setSmallIcon(android.R.drawable.ic_dialog_alert)
+        .setContentTitle("محاولة PIN غير صحيحة")
+        .setContentText(source)
+        .setStyle(NotificationCompat.BigTextStyle().bigText("تم تسجيل محاولة فاشلة: $source. اضغط لإرسال التقرير إلى ${parentEmail(prefs)}"))
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .setAutoCancel(true)
+        .setContentIntent(pendingIntent)
+        .addAction(android.R.drawable.ic_dialog_email, "إرسال التقرير", pendingIntent)
+        .build()
+
+    manager.notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
+}
 
 private fun startMonitorService(context: Context) {
     val intent = Intent(context, MonitorService::class.java)
@@ -278,7 +370,7 @@ class LockActivity : Activity() {
                     prefs.edit().putInt("used_seconds", (used - 900).coerceAtLeast(0)).apply()
                     finish()
                 } else {
-                    recordFailedAttempt(prefs, "شاشة القفل: إضافة وقت")
+                    recordFailedAttempt(this@LockActivity, prefs, "شاشة القفل: إضافة وقت")
                     error.text = "رمز غير صحيح"
                     pin.text.clear()
                 }
@@ -292,7 +384,7 @@ class LockActivity : Activity() {
                     stopService(Intent(this@LockActivity, MonitorService::class.java))
                     finish()
                 } else {
-                    recordFailedAttempt(prefs, "شاشة القفل: فتح الهاتف")
+                    recordFailedAttempt(this@LockActivity, prefs, "شاشة القفل: فتح الهاتف")
                     error.text = "رمز غير صحيح"
                     pin.text.clear()
                 }
