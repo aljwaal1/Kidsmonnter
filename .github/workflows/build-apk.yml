@@ -34,13 +34,17 @@ jobs:
       - name: Remove default test
         run: rm -rf test
 
+      - name: Install native monitoring files
+        run: |
+          mkdir -p android/app/src/main/kotlin/com/explapp/kidstimeguard
+          cp native/MainActivity.kt android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
+          cp native/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          rm -rf android/app/src/main/kotlin/com/explapp/kidsmonnter
+          sed -i 's/com.explapp.kidsmonnter/com.explapp.kidstimeguard/g' android/app/build.gradle.kts || true
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts || true
+
       - name: Install packages
         run: flutter pub get
-
-      - name: Set application id and app name
-        run: |
-          sed -i 's/com.explapp.kidsmonnter/com.explapp.kidstimeguard/g' android/app/build.gradle.kts || true
-          sed -i 's/android:label="kidsmonnter"/android:label="حارس وقت الأطفال"/g' android/app/src/main/AndroidManifest.xml
 
       - name: Analyze
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
