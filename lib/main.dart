@@ -18,8 +18,15 @@ class KidsMonnterApp extends StatelessWidget {
       title: 'حارس وقت الأطفال',
       theme: ThemeData(
         useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF4F7C72),
-        scaffoldBackgroundColor: const Color(0xFFF5F7F6),
+        colorSchemeSeed: const Color(0xFF436B62),
+        scaffoldBackgroundColor: const Color(0xFFF4F7F5),
+        cardTheme: const CardThemeData(
+          elevation: 0,
+          margin: EdgeInsets.zero,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(22)),
+          ),
+        ),
       ),
       home: const Directionality(
         textDirection: TextDirection.rtl,
@@ -40,31 +47,34 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
     with WidgetsBindingObserver {
   static const _selectedMinutesKey = 'selected_minutes';
   static const _remainingSecondsKey = 'remaining_seconds';
-  static const _isRunningKey = 'is_running';
+  static const _protectionEnabledKey = 'protection_enabled';
   static const _savedDateKey = 'saved_date';
   static const _lastUpdateKey = 'last_update';
-  static const _warningShownKey = 'five_minute_warning_shown';
+  static const _fiveMinuteWarningKey = 'five_minute_warning';
+  static const _oneMinuteWarningKey = 'one_minute_warning';
 
   int _selectedMinutes = 60;
   int _remainingSeconds = 3600;
-  Timer? _timer;
-  bool _isRunning = false;
+  bool _protectionEnabled = false;
   bool _fiveMinuteWarningShown = false;
-  bool _isLoading = true;
-  int _secondsSinceLastSave = 0;
+  bool _oneMinuteWarningShown = false;
+  bool _loading = true;
+  bool _finishDialogVisible = false;
+  Timer? _timer;
+  int _secondsSinceSave = 0;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _restoreState();
+    _restore();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
-    _saveState();
+    _save();
     super.dispose();
   }
 
@@ -73,61 +83,58 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
-      _saveState();
+      _save();
     } else if (state == AppLifecycleState.resumed) {
-      _refreshAfterReturn();
+      _restoreElapsedTime();
     }
   }
 
-  String _dateKey(DateTime value) =>
-      '${value.year.toString().padLeft(4, '0')}-'
-      '${value.month.toString().padLeft(2, '0')}-'
-      '${value.day.toString().padLeft(2, '0')}';
+  String _dateKey(DateTime date) =>
+      '${date.year.toString().padLeft(4, '0')}-'
+      '${date.month.toString().padLeft(2, '0')}-'
+      '${date.day.toString().padLeft(2, '0')}';
 
-  Future<void> _restoreState() async {
+  Future<void> _restore() async {
     final prefs = await SharedPreferences.getInstance();
     final now = DateTime.now();
-    final today = _dateKey(now);
     final selected = prefs.getInt(_selectedMinutesKey) ?? 60;
     var remaining = prefs.getInt(_remainingSecondsKey) ?? selected * 60;
-    var running = prefs.getBool(_isRunningKey) ?? false;
-    var warned = prefs.getBool(_warningShownKey) ?? false;
+    var enabled = prefs.getBool(_protectionEnabledKey) ?? false;
+    var fiveShown = prefs.getBool(_fiveMinuteWarningKey) ?? false;
+    var oneShown = prefs.getBool(_oneMinuteWarningKey) ?? false;
 
-    if (prefs.getString(_savedDateKey) != today) {
+    if (prefs.getString(_savedDateKey) != _dateKey(now)) {
       remaining = selected * 60;
-      running = false;
-      warned = false;
-    } else if (running) {
-      final savedMillis = prefs.getInt(_lastUpdateKey);
-      if (savedMillis != null) {
+      fiveShown = false;
+      oneShown = false;
+    } else if (enabled && remaining > 0) {
+      final lastMillis = prefs.getInt(_lastUpdateKey);
+      if (lastMillis != null) {
         final elapsed = now
-            .difference(DateTime.fromMillisecondsSinceEpoch(savedMillis))
+            .difference(DateTime.fromMillisecondsSinceEpoch(lastMillis))
             .inSeconds;
         remaining = (remaining - elapsed).clamp(0, selected * 60).toInt();
       }
     }
 
+    if (remaining == 0) enabled = true;
     if (!mounted) return;
     setState(() {
       _selectedMinutes = selected;
       _remainingSeconds = remaining;
-      _isRunning = running && remaining > 0;
-      _fiveMinuteWarningShown = warned || remaining <= 300;
-      _isLoading = false;
+      _protectionEnabled = enabled;
+      _fiveMinuteWarningShown = fiveShown || remaining <= 300;
+      _oneMinuteWarningShown = oneShown || remaining <= 60;
+      _loading = false;
     });
 
-    if (_isRunning) _startTicker();
-    await _saveState();
-
-    if (_remainingSeconds == 0) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _showTimeFinishedDialog();
-      });
-    }
+    if (_protectionEnabled && _remainingSeconds > 0) _startTimer();
+    await _save();
+    if (_remainingSeconds == 0) _showFinishedDialog();
   }
 
-  Future<void> _refreshAfterReturn() async {
-    if (_isLoading) return;
+  Future<void> _restoreElapsedTime() async {
+    if (_loading || !_protectionEnabled || _remainingSeconds == 0) return;
     final prefs = await SharedPreferences.getInstance();
     final now = DateTime.now();
 
@@ -135,79 +142,52 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
       _timer?.cancel();
       setState(() {
         _remainingSeconds = _selectedMinutes * 60;
-        _isRunning = false;
         _fiveMinuteWarningShown = false;
+        _oneMinuteWarningShown = false;
       });
-      await _saveState();
+      _startTimer();
+      await _save();
       return;
     }
 
-    if (!_isRunning) return;
-    final savedMillis = prefs.getInt(_lastUpdateKey);
-    if (savedMillis == null) return;
-
+    final lastMillis = prefs.getInt(_lastUpdateKey);
+    if (lastMillis == null) return;
     final elapsed = now
-        .difference(DateTime.fromMillisecondsSinceEpoch(savedMillis))
+        .difference(DateTime.fromMillisecondsSinceEpoch(lastMillis))
         .inSeconds;
     if (elapsed <= 0) return;
 
-    final updated = (_remainingSeconds - elapsed)
-        .clamp(0, _selectedMinutes * 60)
-        .toInt();
     setState(() {
-      _remainingSeconds = updated;
-      if (updated == 0) _isRunning = false;
+      _remainingSeconds = (_remainingSeconds - elapsed)
+          .clamp(0, _selectedMinutes * 60)
+          .toInt();
     });
-
-    if (_remainingSeconds <= 300 && !_fiveMinuteWarningShown) {
-      _showFiveMinuteWarning();
-    }
-
+    _checkWarnings();
     if (_remainingSeconds == 0) {
       _timer?.cancel();
-      await _saveState();
-      await _showTimeFinishedDialog();
+      await _save();
+      _showFinishedDialog();
     } else {
-      _startTicker();
-      await _saveState();
+      _startTimer();
+      await _save();
     }
   }
 
-  Future<void> _saveState() async {
+  Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
     final now = DateTime.now();
     await prefs.setInt(_selectedMinutesKey, _selectedMinutes);
     await prefs.setInt(_remainingSecondsKey, _remainingSeconds);
-    await prefs.setBool(_isRunningKey, _isRunning);
+    await prefs.setBool(_protectionEnabledKey, _protectionEnabled);
     await prefs.setString(_savedDateKey, _dateKey(now));
     await prefs.setInt(_lastUpdateKey, now.millisecondsSinceEpoch);
-    await prefs.setBool(_warningShownKey, _fiveMinuteWarningShown);
+    await prefs.setBool(_fiveMinuteWarningKey, _fiveMinuteWarningShown);
+    await prefs.setBool(_oneMinuteWarningKey, _oneMinuteWarningShown);
   }
 
-  Future<void> _setDailyMinutes(int minutes) async {
+  void _startTimer() {
     _timer?.cancel();
-    setState(() {
-      _selectedMinutes = minutes;
-      _remainingSeconds = minutes * 60;
-      _isRunning = false;
-      _fiveMinuteWarningShown = false;
-    });
-    await _saveState();
-  }
-
-  Future<void> _toggleTimer() async {
-    if (_isRunning) {
-      _timer?.cancel();
-      setState(() => _isRunning = false);
-    } else if (_remainingSeconds > 0) {
-      setState(() => _isRunning = true);
-      _startTicker();
-    }
-    await _saveState();
-  }
-
-  void _startTicker() {
-    _timer?.cancel();
+    if (!_protectionEnabled || _remainingSeconds <= 0) return;
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (!mounted) {
         timer.cancel();
@@ -215,70 +195,132 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
       }
       if (_remainingSeconds <= 1) {
         timer.cancel();
-        setState(() {
-          _remainingSeconds = 0;
-          _isRunning = false;
-        });
-        await _saveState();
-        await _showTimeFinishedDialog();
+        setState(() => _remainingSeconds = 0);
+        await _save();
+        _showFinishedDialog();
         return;
       }
-
       setState(() => _remainingSeconds--);
-      _secondsSinceLastSave++;
-      if (_remainingSeconds <= 300 && !_fiveMinuteWarningShown) {
-        _showFiveMinuteWarning();
-      }
-      if (_secondsSinceLastSave >= 10) {
-        _secondsSinceLastSave = 0;
-        await _saveState();
+      _checkWarnings();
+      _secondsSinceSave++;
+      if (_secondsSinceSave >= 10) {
+        _secondsSinceSave = 0;
+        await _save();
       }
     });
   }
 
-  void _showFiveMinuteWarning() {
+  void _checkWarnings() {
+    if (_remainingSeconds <= 300 && !_fiveMinuteWarningShown) {
+      _fiveMinuteWarningShown = true;
+      _showWarning('تبقّى 5 دقائق', 'احفظ ما تعمل عليه قبل انتهاء الوقت.');
+      _save();
+    }
+    if (_remainingSeconds <= 60 && !_oneMinuteWarningShown) {
+      _oneMinuteWarningShown = true;
+      _showWarning('تبقّت دقيقة واحدة', 'سينتهي وقت الهاتف بعد دقيقة.');
+      _save();
+    }
+  }
+
+  void _showWarning(String title, String message) {
     if (!mounted) return;
-    setState(() => _fiveMinuteWarningShown = true);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        duration: Duration(seconds: 8),
-        content: Text(
-          'تبقّى 5 دقائق فقط من وقت استخدام الهاتف اليوم. احفظ ما تعمل عليه.',
-          textAlign: TextAlign.center,
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 8),
+          behavior: SnackBarBehavior.floating,
+          content: Row(
+            children: [
+              const Icon(Icons.timer_outlined, color: Colors.white),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    Text(message),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
-      ),
-    );
-    _saveState();
+      );
   }
 
-  Future<void> _resetTimer() async {
-    _timer?.cancel();
-    setState(() {
-      _remainingSeconds = _selectedMinutes * 60;
-      _isRunning = false;
-      _fiveMinuteWarningShown = false;
-    });
-    await _saveState();
+  Future<void> _toggleProtection(bool enabled) async {
+    setState(() => _protectionEnabled = enabled);
+    if (enabled) {
+      _startTimer();
+    } else {
+      _timer?.cancel();
+    }
+    await _save();
   }
 
-  Future<void> _showTimeFinishedDialog() async {
-    if (!mounted) return;
-    await showDialog<void>(
+  Future<void> _requestDurationChange(int minutes) async {
+    if (minutes == _selectedMinutes) return;
+    final approved = await showDialog<bool>(
       context: context,
-      barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title: const Text('انتهى وقت الهاتف'),
-        content: const Text(
-          'انتهى وقت استخدام الهاتف لهذا اليوم. يحتاج فتحه إلى موافقة ولي الأمر.',
+        title: const Text('تغيير المدة اليومية'),
+        content: Text(
+          'سيتم اعتماد ${_durationLabel(minutes)} وإعادة رصيد اليوم من البداية.',
         ),
         actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('إلغاء'),
+          ),
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('حسنًا'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('اعتماد'),
           ),
         ],
       ),
     );
+    if (approved != true || !mounted) return;
+
+    _timer?.cancel();
+    setState(() {
+      _selectedMinutes = minutes;
+      _remainingSeconds = minutes * 60;
+      _fiveMinuteWarningShown = false;
+      _oneMinuteWarningShown = false;
+    });
+    if (_protectionEnabled) _startTimer();
+    await _save();
+  }
+
+  Future<void> _showFinishedDialog() async {
+    if (!mounted || _finishDialogVisible) return;
+    _finishDialogVisible = true;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          icon: const Icon(Icons.lock_clock_outlined, size: 48),
+          title: const Text('انتهى وقت الهاتف'),
+          content: const Text(
+            'تم استهلاك الوقت المتاح لهذا اليوم. فتح الهاتف يحتاج إلى موافقة ولي الأمر.',
+            textAlign: TextAlign.center,
+          ),
+          actionsAlignment: MainAxisAlignment.center,
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('طلب موافقة ولي الأمر'),
+            ),
+          ],
+        ),
+      ),
+    );
+    _finishDialogVisible = false;
   }
 
   String get _formattedRemaining {
@@ -292,16 +334,25 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
 
   String _durationLabel(int minutes) {
     if (minutes < 60) return '$minutes دقيقة';
-    if (minutes == 60) return 'ساعة';
-    return '${minutes ~/ 60} ساعة${minutes % 60 == 30 ? ' ونصف' : ''}';
+    if (minutes == 60) return 'ساعة واحدة';
+    if (minutes == 90) return 'ساعة ونصف';
+    if (minutes == 120) return 'ساعتان';
+    return '${minutes ~/ 60} ساعات';
+  }
+
+  double get _progress {
+    final total = _selectedMinutes * 60;
+    if (total == 0) return 0;
+    return (_remainingSeconds / total).clamp(0, 1).toDouble();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
+    if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: const Text('حارس وقت الأطفال'),
@@ -309,56 +360,94 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
       ),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.fromLTRB(18, 8, 18, 28),
           children: [
-            const Text(
-              'وقت الهاتف اليومي',
-              style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer,
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 26,
+                    backgroundColor: scheme.primary,
+                    child: Icon(Icons.shield_outlined, color: scheme.onPrimary),
+                  ),
+                  const SizedBox(width: 14),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'رصيد واحد للهاتف بالكامل',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        SizedBox(height: 4),
+                        Text('جميع التطبيقات تُخصم من الوقت اليومي نفسه.'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
-            const Text('جميع التطبيقات تُحسب من رصيد واحد للهاتف بالكامل.'),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
             Card(
               child: Padding(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.all(22),
                 child: Column(
                   children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'الحماية اليومية',
+                          style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                        ),
+                        Switch(
+                          value: _protectionEnabled,
+                          onChanged: _remainingSeconds == 0 ? null : _toggleProtection,
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 28),
                     const Text('الوقت المتبقي اليوم'),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 10),
                     Text(
                       _formattedRemaining,
                       textDirection: TextDirection.ltr,
                       style: const TextStyle(
-                        fontSize: 42,
+                        fontSize: 44,
                         fontWeight: FontWeight.w800,
                         letterSpacing: 2,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      _isRunning ? 'العداد يعمل الآن' : 'العداد متوقف مؤقتًا',
-                      style: TextStyle(
-                        color: _isRunning ? Colors.green.shade700 : Colors.grey,
-                        fontWeight: FontWeight.w600,
+                    const SizedBox(height: 16),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(20),
+                      child: LinearProgressIndicator(
+                        value: _progress,
+                        minHeight: 12,
                       ),
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 12),
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Expanded(
-                          child: FilledButton.icon(
-                            onPressed: _toggleTimer,
-                            icon: Icon(
-                              _isRunning ? Icons.pause : Icons.play_arrow,
-                            ),
-                            label: Text(_isRunning ? 'إيقاف مؤقت' : 'بدء'),
-                          ),
+                        Icon(
+                          _protectionEnabled ? Icons.check_circle : Icons.pause_circle,
+                          size: 18,
+                          color: _protectionEnabled ? Colors.green.shade700 : Colors.grey,
                         ),
-                        const SizedBox(width: 12),
-                        IconButton.filledTonal(
-                          onPressed: _resetTimer,
-                          tooltip: 'إعادة ضبط',
-                          icon: const Icon(Icons.restart_alt),
+                        const SizedBox(width: 7),
+                        Text(
+                          _remainingSeconds == 0
+                              ? 'انتهى وقت اليوم'
+                              : _protectionEnabled
+                                  ? 'الحماية مفعّلة والعداد يعمل تلقائيًا'
+                                  : 'الحماية متوقفة مؤقتًا',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                       ],
                     ),
@@ -366,54 +455,39 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
                 ),
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 22),
             const Text(
-              'اختر المدة اليومية',
+              'المدة اليومية',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
             Wrap(
-              spacing: 10,
-              runSpacing: 10,
+              spacing: 9,
+              runSpacing: 9,
               children: [30, 60, 90, 120, 180].map((minutes) {
                 return ChoiceChip(
                   label: Text(_durationLabel(minutes)),
                   selected: _selectedMinutes == minutes,
-                  onSelected: (_) => _setDailyMinutes(minutes),
+                  onSelected: (_) => _requestDurationChange(minutes),
                 );
               }).toList(),
             ),
-            const SizedBox(height: 28),
+            const SizedBox(height: 22),
             const Card(
-              child: ListTile(
-                leading: Icon(Icons.save_outlined),
-                title: Text('حفظ تلقائي'),
-                subtitle: Text(
-                  'يُحفظ الوقت المتبقي ويُستعاد بعد إغلاق التطبيق أو إعادة تشغيل الهاتف.',
-                ),
-              ),
-            ),
-            const Card(
-              child: ListTile(
-                leading: Icon(Icons.today_outlined),
-                title: Text('رصيد يومي جديد'),
-                subtitle: Text('يُعاد ضبط الرصيد تلقائيًا عند بداية يوم جديد.'),
-              ),
-            ),
-            const Card(
-              child: ListTile(
-                leading: Icon(Icons.notifications_active_outlined),
-                title: Text('تنبيه قبل انتهاء الوقت'),
-                subtitle: Text('سيظهر تنبيه واضح عندما يتبقى 5 دقائق.'),
-              ),
-            ),
-            const Card(
-              child: ListTile(
-                leading: Icon(Icons.shield_outlined),
-                title: Text('الحماية المتقدمة'),
-                subtitle: Text(
-                  'سيتم ربط القفل وصلاحيات إدارة الجهاز في المرحلة التالية.',
-                ),
+              child: Column(
+                children: [
+                  ListTile(
+                    leading: Icon(Icons.notifications_active_outlined),
+                    title: Text('تنبيهات انتهاء الوقت'),
+                    subtitle: Text('تنبيه عند بقاء 5 دقائق، وتنبيه أخير عند بقاء دقيقة.'),
+                  ),
+                  Divider(height: 1),
+                  ListTile(
+                    leading: Icon(Icons.save_outlined),
+                    title: Text('حفظ تلقائي'),
+                    subtitle: Text('المدة والوقت المتبقي محفوظان بعد إغلاق التطبيق.'),
+                  ),
+                ],
               ),
             ),
           ],
