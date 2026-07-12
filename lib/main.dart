@@ -46,6 +46,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _overlayAllowed = false;
   bool _hasPin = false;
   bool _loading = true;
+  String _parentEmail = '';
   Timer? _refreshTimer;
 
   @override
@@ -75,13 +76,12 @@ class _HomeScreenState extends State<HomeScreen> {
         _dailyMinutes = (status['dailyMinutes'] as num?)?.toInt() ?? 60;
         _failedAttempts = (status['failedAttempts'] as num?)?.toInt() ?? 0;
         _hasPin = status['hasPin'] == true;
+        _parentEmail = status['parentEmail']?.toString() ?? '';
         _overlayAllowed = overlay;
         _loading = false;
       });
     } on PlatformException catch (error) {
-      if (!silent && mounted) {
-        _message('تعذر قراءة حالة الحماية: ${error.message ?? ''}');
-      }
+      if (!silent) _message('تعذر قراءة حالة الحماية: ${error.message ?? ''}');
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -176,6 +176,18 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<bool> _verifyParent(String title) async {
+    if (!await _ensurePin()) return false;
+    final pin = await _askPin(title: title);
+    if (pin == null) return false;
+    final valid = await _channel.invokeMethod<bool>('verifyPin', {'pin': pin}) ?? false;
+    if (!valid) {
+      _message('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
+      await _loadStatus();
+    }
+    return valid;
+  }
+
   Future<void> _setProtection(bool value) async {
     if (value) {
       if (!await _ensurePin()) return;
@@ -192,28 +204,18 @@ class _HomeScreenState extends State<HomeScreen> {
         await _channel.invokeMethod('stopProtection', {'pin': pin});
       } on PlatformException {
         _message('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
-        await _loadStatus();
-        return;
       }
     }
     await _loadStatus();
   }
 
   Future<void> _changeDuration(int minutes) async {
-    if (!await _ensurePin()) return;
-    final pin = await _askPin(title: 'تأكيد تغيير المدة');
-    if (pin == null) return;
-    final verified = await _channel.invokeMethod<bool>('verifyPin', {'pin': pin}) ?? false;
-    if (!verified) {
-      _message('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
-      await _loadStatus();
-      return;
-    }
+    if (!await _verifyParent('تأكيد تغيير المدة')) return;
     setState(() => _dailyMinutes = minutes);
     if (_enabled) {
       await _channel.invokeMethod('startProtection', {'minutes': minutes});
-      await _loadStatus();
     }
+    await _loadStatus();
   }
 
   Future<void> _addTime(int minutes) async {
@@ -221,24 +223,90 @@ class _HomeScreenState extends State<HomeScreen> {
     if (pin == null) return;
     try {
       await _channel.invokeMethod('addTime', {'pin': pin, 'minutes': minutes});
-      await _loadStatus();
       _message('تمت إضافة $minutes دقيقة.');
     } on PlatformException {
       _message('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
+    }
+    await _loadStatus();
+  }
+
+  Future<void> _editParentEmail() async {
+    if (!await _verifyParent('تأكيد تغيير البريد')) return;
+    if (!mounted) return;
+
+    final controller = TextEditingController(text: _parentEmail);
+    String? error;
+    final email = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('بريد ولي الأمر'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('ستُرسل تقارير محاولات تجاوز القفل إلى هذا البريد.'),
+              const SizedBox(height: 14),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                keyboardType: TextInputType.emailAddress,
+                textDirection: TextDirection.ltr,
+                decoration: const InputDecoration(
+                  labelText: 'البريد الإلكتروني',
+                  prefixIcon: Icon(Icons.email_outlined),
+                ),
+              ),
+              if (error != null) ...[
+                const SizedBox(height: 10),
+                Text(error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
+            FilledButton(
+              onPressed: () {
+                final value = controller.text.trim();
+                final valid = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(value);
+                if (!valid) {
+                  setDialogState(() => error = 'أدخل بريدًا إلكترونيًا صحيحًا.');
+                  return;
+                }
+                Navigator.pop(context, value);
+              },
+              child: const Text('حفظ'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (email == null) return;
+    try {
+      await _channel.invokeMethod('setParentEmail', {'email': email});
       await _loadStatus();
+      _message('تم حفظ بريد ولي الأمر.');
+    } on PlatformException catch (error) {
+      _message(error.message ?? 'تعذر حفظ البريد.');
+    }
+  }
+
+  Future<void> _sendSecurityReport() async {
+    try {
+      await _channel.invokeMethod('sendSecurityReport');
+    } on PlatformException catch (error) {
+      _message(error.message ?? 'تعذر فتح تطبيق البريد.');
     }
   }
 
   Future<void> _showFailedAttempts() async {
     final raw = await _channel.invokeListMethod<dynamic>('getFailedAttempts') ?? const [];
     if (!mounted) return;
-    final attempts = raw
-        .whereType<Map>()
-        .map((item) => {
-              'time': item['time']?.toString() ?? '',
-              'source': item['source']?.toString() ?? '',
-            })
-        .toList();
+    final attempts = raw.whereType<Map>().map((item) => {
+          'time': item['time']?.toString() ?? '',
+          'source': item['source']?.toString() ?? '',
+        }).toList();
 
     await showDialog<void>(
       context: context,
@@ -265,10 +333,19 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           if (attempts.isNotEmpty)
-            TextButton(
-              onPressed: () async {
+            TextButton.icon(
+              onPressed: () {
                 Navigator.pop(context);
-                await _clearFailedAttempts();
+                _sendSecurityReport();
+              },
+              icon: const Icon(Icons.email_outlined),
+              label: const Text('إرسال التقرير'),
+            ),
+          if (attempts.isNotEmpty)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _clearFailedAttempts();
               },
               child: const Text('مسح السجل'),
             ),
@@ -283,12 +360,11 @@ class _HomeScreenState extends State<HomeScreen> {
     if (pin == null) return;
     try {
       await _channel.invokeMethod('clearFailedAttempts', {'pin': pin});
-      await _loadStatus();
       _message('تم مسح سجل المحاولات.');
     } on PlatformException {
       _message('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
-      await _loadStatus();
     }
+    await _loadStatus();
   }
 
   int get _limitSeconds => _dailyMinutes * 60;
@@ -378,11 +454,24 @@ class _HomeScreenState extends State<HomeScreen> {
               child: ListTile(
                 leading: Icon(_hasPin ? Icons.lock : Icons.lock_open),
                 title: Text(_hasPin ? 'رمز ولي الأمر محفوظ' : 'أنشئ رمز ولي الأمر'),
-                subtitle: const Text('مطلوب لإيقاف الحماية أو تغيير المدة أو فتح القفل.'),
+                subtitle: const Text('مطلوب لإيقاف الحماية أو تغيير الإعدادات.'),
                 trailing: FilledButton.tonal(
                   onPressed: _ensurePin,
                   child: Text(_hasPin ? 'محفوظ' : 'إنشاء'),
                 ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.alternate_email),
+                title: const Text('بريد ولي الأمر'),
+                subtitle: Text(
+                  _parentEmail.isEmpty ? 'لم يتم تحديد بريد إلكتروني.' : _parentEmail,
+                  textDirection: TextDirection.ltr,
+                ),
+                trailing: const Icon(Icons.edit_outlined),
+                onTap: _editParentEmail,
               ),
             ),
             const SizedBox(height: 10),
@@ -427,6 +516,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(height: 10),
                       Wrap(
                         spacing: 8,
+                        runSpacing: 8,
                         children: [10, 15, 30, 60]
                             .map((minutes) => OutlinedButton(
                                   onPressed: () => _addTime(minutes),
