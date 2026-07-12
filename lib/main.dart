@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const KidsMonnterApp());
 }
 
@@ -34,20 +36,175 @@ class DailyTimeScreen extends StatefulWidget {
   State<DailyTimeScreen> createState() => _DailyTimeScreenState();
 }
 
-class _DailyTimeScreenState extends State<DailyTimeScreen> {
+class _DailyTimeScreenState extends State<DailyTimeScreen>
+    with WidgetsBindingObserver {
+  static const _selectedMinutesKey = 'selected_minutes';
+  static const _remainingSecondsKey = 'remaining_seconds';
+  static const _isRunningKey = 'is_running';
+  static const _savedDateKey = 'saved_date';
+  static const _lastUpdateKey = 'last_update';
+  static const _warningShownKey = 'five_minute_warning_shown';
+
   int _selectedMinutes = 60;
   int _remainingSeconds = 60 * 60;
   Timer? _timer;
   bool _isRunning = false;
   bool _fiveMinuteWarningShown = false;
+  bool _isLoading = true;
+  int _secondsSinceLastSave = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _restoreState();
+  }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
+    _saveState();
     super.dispose();
   }
 
-  void _setDailyMinutes(int minutes) {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _saveState();
+    } else if (state == AppLifecycleState.resumed) {
+      _refreshAfterReturn();
+    }
+  }
+
+  String _dateKey(DateTime value) {
+    return '${value.year.toString().padLeft(4, '0')}-'
+        '${value.month.toString().padLeft(2, '0')}-'
+        '${value.day.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _restoreState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final now = DateTime.now();
+    final today = _dateKey(now);
+    final savedDate = prefs.getString(_savedDateKey);
+
+    final selectedMinutes = prefs.getInt(_selectedMinutesKey) ?? 60;
+    var remainingSeconds =
+        prefs.getInt(_remainingSecondsKey) ?? selectedMinutes * 60;
+    var isRunning = prefs.getBool(_isRunningKey) ?? false;
+    var warningShown = prefs.getBool(_warningShownKey) ?? false;
+
+    if (savedDate != today) {
+      remainingSeconds = selectedMinutes * 60;
+      isRunning = false;
+      warningShown = false;
+    } else if (isRunning) {
+      final lastUpdateMillis = prefs.getInt(_lastUpdateKey);
+      if (lastUpdateMillis != null) {
+        final lastUpdate =
+            DateTime.fromMillisecondsSinceEpoch(lastUpdateMillis);
+        final elapsed = now.difference(lastUpdate).inSeconds;
+        if (elapsed > 0) {
+          remainingSeconds = (remainingSeconds - elapsed).clamp(
+            0,
+            selectedMinutes * 60,
+          );
+        }
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _selectedMinutes = selectedMinutes;
+      _remainingSeconds = remainingSeconds;
+      _isRunning = isRunning && remainingSeconds > 0;
+      _fiveMinuteWarningShown = warningShown || remainingSeconds <= 300;
+      _isLoading = false;
+    });
+
+    if (_isRunning) {
+      _startTicker();
+    }
+
+    await _saveState();
+
+    if (_remainingSeconds <= 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _showTimeFinishedDialog();
+      });
+    }
+  }
+
+  Future<void> _refreshAfterReturn() async {
+    if (_isLoading) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final now = DateTime.now();
+    final today = _dateKey(now);
+    final savedDate = prefs.getString(_savedDateKey);
+
+    if (savedDate != today) {
+      _timer?.cancel();
+      setState(() {
+        _remainingSeconds = _selectedMinutes * 60;
+        _isRunning = false;
+        _fiveMinuteWarningShown = false;
+      });
+      await _saveState();
+      return;
+    }
+
+    if (!_isRunning) return;
+
+    final lastUpdateMillis = prefs.getInt(_lastUpdateKey);
+    if (lastUpdateMillis == null) return;
+
+    final lastUpdate = DateTime.fromMillisecondsSinceEpoch(lastUpdateMillis);
+    final elapsed = now.difference(lastUpdate).inSeconds;
+    if (elapsed <= 0) return;
+
+    final updated = (_remainingSeconds - elapsed).clamp(
+      0,
+      _selectedMinutes * 60,
+    );
+
+    setState(() {
+      _remainingSeconds = updated;
+      if (_remainingSeconds <= 0) {
+        _isRunning = false;
+      }
+    });
+
+    if (_remainingSeconds <= 300 && !_fiveMinuteWarningShown) {
+      _showFiveMinuteWarning();
+    }
+
+    if (_remainingSeconds <= 0) {
+      _timer?.cancel();
+      await _saveState();
+      await _showTimeFinishedDialog();
+      return;
+    }
+
+    _startTicker();
+    await _saveState();
+  }
+
+  Future<void> _saveState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final now = DateTime.now();
+    await prefs.setInt(_selectedMinutesKey, _selectedMinutes);
+    await prefs.setInt(_remainingSecondsKey, _remainingSeconds);
+    await prefs.setBool(_isRunningKey, _isRunning);
+    await prefs.setString(_savedDateKey, _dateKey(now));
+    await prefs.setInt(_lastUpdateKey, now.millisecondsSinceEpoch);
+    await prefs.setBool(_warningShownKey, _fiveMinuteWarningShown);
+  }
+
+  Future<void> _setDailyMinutes(int minutes) async {
     _timer?.cancel();
     setState(() {
       _selectedMinutes = minutes;
@@ -55,55 +212,80 @@ class _DailyTimeScreenState extends State<DailyTimeScreen> {
       _isRunning = false;
       _fiveMinuteWarningShown = false;
     });
+    await _saveState();
   }
 
-  void _toggleTimer() {
+  Future<void> _toggleTimer() async {
     if (_isRunning) {
       _timer?.cancel();
       setState(() => _isRunning = false);
+      await _saveState();
       return;
     }
 
-    if (_remainingSeconds <= 0) {
-      return;
-    }
+    if (_remainingSeconds <= 0) return;
 
     setState(() => _isRunning = true);
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    _startTicker();
+    await _saveState();
+  }
+
+  void _startTicker() {
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+
       if (_remainingSeconds <= 1) {
         timer.cancel();
         setState(() {
           _remainingSeconds = 0;
           _isRunning = false;
         });
-        _showTimeFinishedDialog();
+        await _saveState();
+        await _showTimeFinishedDialog();
         return;
       }
 
       setState(() => _remainingSeconds--);
+      _secondsSinceLastSave++;
 
       if (_remainingSeconds <= 300 && !_fiveMinuteWarningShown) {
-        _fiveMinuteWarningShown = true;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            duration: Duration(seconds: 8),
-            content: Text(
-              'تبقّى 5 دقائق فقط من وقت استخدام الهاتف اليوم.',
-              textAlign: TextAlign.center,
-            ),
-          ),
-        );
+        _showFiveMinuteWarning();
+      }
+
+      if (_secondsSinceLastSave >= 10) {
+        _secondsSinceLastSave = 0;
+        await _saveState();
       }
     });
   }
 
-  void _resetTimer() {
+  void _showFiveMinuteWarning() {
+    if (!mounted) return;
+    setState(() => _fiveMinuteWarningShown = true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        duration: Duration(seconds: 8),
+        content: Text(
+          'تبقّى 5 دقائق فقط من وقت استخدام الهاتف اليوم. احفظ ما تعمل عليه.',
+          textAlign: TextAlign.center,
+        ),
+      ),
+    );
+    _saveState();
+  }
+
+  Future<void> _resetTimer() async {
     _timer?.cancel();
     setState(() {
       _remainingSeconds = _selectedMinutes * 60;
       _isRunning = false;
       _fiveMinuteWarningShown = false;
     });
+    await _saveState();
   }
 
   Future<void> _showTimeFinishedDialog() async {
@@ -137,6 +319,12 @@ class _DailyTimeScreenState extends State<DailyTimeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('حارس وقت الأطفال'),
@@ -170,6 +358,14 @@ class _DailyTimeScreenState extends State<DailyTimeScreen> {
                         fontSize: 42,
                         fontWeight: FontWeight.w800,
                         letterSpacing: 2,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _isRunning ? 'العداد يعمل الآن' : 'العداد متوقف مؤقتًا',
+                      style: TextStyle(
+                        color: _isRunning ? Colors.green.shade700 : Colors.grey,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                     const SizedBox(height: 20),
@@ -220,6 +416,22 @@ class _DailyTimeScreenState extends State<DailyTimeScreen> {
               }).toList(),
             ),
             const SizedBox(height: 28),
+            const Card(
+              child: ListTile(
+                leading: Icon(Icons.save_outlined),
+                title: Text('حفظ تلقائي'),
+                subtitle: Text(
+                  'يُحفظ الوقت المتبقي ويُستعاد بعد إغلاق التطبيق أو إعادة تشغيل الهاتف.',
+                ),
+              ),
+            ),
+            const Card(
+              child: ListTile(
+                leading: Icon(Icons.today_outlined),
+                title: Text('رصيد يومي جديد'),
+                subtitle: Text('يُعاد ضبط الرصيد تلقائيًا عند بداية يوم جديد.'),
+              ),
+            ),
             const Card(
               child: ListTile(
                 leading: Icon(Icons.notifications_active_outlined),
