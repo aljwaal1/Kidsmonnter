@@ -16,13 +16,17 @@ import io.flutter.plugin.common.MethodChannel
 import java.text.SimpleDateFormat
 import java.util.*
 
+private const val PREFS_NAME = "kidsmonnter"
+private const val FAILED_ATTEMPTS_KEY = "failed_pin_attempts"
+private const val MAX_FAILED_ATTEMPTS = 50
+
 class MainActivity : FlutterActivity() {
     private val channel = "kidsmonnter/control"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channel).setMethodCallHandler { call, result ->
-            val prefs = getSharedPreferences("kidsmonnter", MODE_PRIVATE)
+            val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             when (call.method) {
                 "setPin" -> {
                     val pin = call.argument<String>("pin") ?: ""
@@ -36,7 +40,9 @@ class MainActivity : FlutterActivity() {
                 "hasPin" -> result.success((prefs.getString("parent_pin", "") ?: "").length == 6)
                 "verifyPin" -> {
                     val pin = call.argument<String>("pin") ?: ""
-                    result.success(pin == prefs.getString("parent_pin", ""))
+                    val valid = pin == prefs.getString("parent_pin", "")
+                    if (!valid) recordFailedAttempt(prefs, "تغيير المدة")
+                    result.success(valid)
                 }
                 "startProtection" -> {
                     val minutes = call.argument<Int>("minutes") ?: 60
@@ -51,6 +57,7 @@ class MainActivity : FlutterActivity() {
                 "stopProtection" -> {
                     val pin = call.argument<String>("pin") ?: ""
                     if (pin != prefs.getString("parent_pin", "")) {
+                        recordFailedAttempt(prefs, "إيقاف الحماية")
                         result.error("WRONG_PIN", "رمز ولي الأمر غير صحيح", null)
                     } else {
                         prefs.edit().putBoolean("enabled", false).apply()
@@ -62,6 +69,7 @@ class MainActivity : FlutterActivity() {
                     val pin = call.argument<String>("pin") ?: ""
                     val minutes = call.argument<Int>("minutes") ?: 0
                     if (pin != prefs.getString("parent_pin", "")) {
+                        recordFailedAttempt(prefs, "إضافة وقت")
                         result.error("WRONG_PIN", "رمز ولي الأمر غير صحيح", null)
                     } else {
                         val used = prefs.getInt("used_seconds", 0)
@@ -69,11 +77,23 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     }
                 }
+                "getFailedAttempts" -> result.success(readFailedAttempts(prefs))
+                "clearFailedAttempts" -> {
+                    val pin = call.argument<String>("pin") ?: ""
+                    if (pin != prefs.getString("parent_pin", "")) {
+                        recordFailedAttempt(prefs, "مسح سجل المحاولات")
+                        result.error("WRONG_PIN", "رمز ولي الأمر غير صحيح", null)
+                    } else {
+                        prefs.edit().remove(FAILED_ATTEMPTS_KEY).apply()
+                        result.success(true)
+                    }
+                }
                 "getStatus" -> result.success(mapOf(
                     "enabled" to prefs.getBoolean("enabled", false),
                     "usedSeconds" to prefs.getInt("used_seconds", 0),
                     "dailyMinutes" to prefs.getInt("daily_minutes", 60),
-                    "hasPin" to ((prefs.getString("parent_pin", "") ?: "").length == 6)
+                    "hasPin" to ((prefs.getString("parent_pin", "") ?: "").length == 6),
+                    "failedAttempts" to readFailedAttempts(prefs).size
                 ))
                 "openOverlaySettings" -> {
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName")))
@@ -88,6 +108,32 @@ class MainActivity : FlutterActivity() {
 
 private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 
+private fun attemptTimestamp(): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+
+private fun recordFailedAttempt(prefs: android.content.SharedPreferences, source: String) {
+    val entries = prefs.getString(FAILED_ATTEMPTS_KEY, "")
+        .orEmpty()
+        .lineSequence()
+        .filter { it.isNotBlank() }
+        .toMutableList()
+    entries.add("${attemptTimestamp()}|$source")
+    val trimmed = entries.takeLast(MAX_FAILED_ATTEMPTS)
+    prefs.edit().putString(FAILED_ATTEMPTS_KEY, trimmed.joinToString("\n")).apply()
+}
+
+private fun readFailedAttempts(prefs: android.content.SharedPreferences): List<Map<String, String>> =
+    prefs.getString(FAILED_ATTEMPTS_KEY, "")
+        .orEmpty()
+        .lineSequence()
+        .filter { it.isNotBlank() }
+        .mapNotNull { line ->
+            val parts = line.split("|", limit = 2)
+            if (parts.size != 2) null else mapOf("time" to parts[0], "source" to parts[1])
+        }
+        .toList()
+        .asReversed()
+
 private fun startMonitorService(context: Context) {
     val intent = Intent(context, MonitorService::class.java)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
@@ -95,7 +141,7 @@ private fun startMonitorService(context: Context) {
 }
 
 class MonitorService : Service() {
-    private val prefs by lazy { getSharedPreferences("kidsmonnter", MODE_PRIVATE) }
+    private val prefs by lazy { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
     private var screenOn = true
     private val handler = Handler(Looper.getMainLooper())
     private var lockShown = false
@@ -183,7 +229,7 @@ class MonitorService : Service() {
 }
 
 class LockActivity : Activity() {
-    private val prefs by lazy { getSharedPreferences("kidsmonnter", MODE_PRIVATE) }
+    private val prefs by lazy { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -232,6 +278,7 @@ class LockActivity : Activity() {
                     prefs.edit().putInt("used_seconds", (used - 900).coerceAtLeast(0)).apply()
                     finish()
                 } else {
+                    recordFailedAttempt(prefs, "شاشة القفل: إضافة وقت")
                     error.text = "رمز غير صحيح"
                     pin.text.clear()
                 }
@@ -245,6 +292,7 @@ class LockActivity : Activity() {
                     stopService(Intent(this@LockActivity, MonitorService::class.java))
                     finish()
                 } else {
+                    recordFailedAttempt(prefs, "شاشة القفل: فتح الهاتف")
                     error.text = "رمز غير صحيح"
                     pin.text.clear()
                 }
@@ -265,7 +313,7 @@ class LockActivity : Activity() {
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        val prefs = context.getSharedPreferences("kidsmonnter", Context.MODE_PRIVATE)
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         if (prefs.getBoolean("enabled", false)) startMonitorService(context)
     }
 }
