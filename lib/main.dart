@@ -46,7 +46,7 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
   static const _warningShownKey = 'five_minute_warning_shown';
 
   int _selectedMinutes = 60;
-  int _remainingSeconds = 60 * 60;
+  int _remainingSeconds = 3600;
   Timer? _timer;
   bool _isRunning = false;
   bool _fiveMinuteWarningShown = false;
@@ -79,59 +79,47 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
     }
   }
 
-  String _dateKey(DateTime value) {
-    return '${value.year.toString().padLeft(4, '0')}-'
-        '${value.month.toString().padLeft(2, '0')}-'
-        '${value.day.toString().padLeft(2, '0')}';
-  }
+  String _dateKey(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
 
   Future<void> _restoreState() async {
     final prefs = await SharedPreferences.getInstance();
     final now = DateTime.now();
     final today = _dateKey(now);
-    final savedDate = prefs.getString(_savedDateKey);
+    final selected = prefs.getInt(_selectedMinutesKey) ?? 60;
+    var remaining = prefs.getInt(_remainingSecondsKey) ?? selected * 60;
+    var running = prefs.getBool(_isRunningKey) ?? false;
+    var warned = prefs.getBool(_warningShownKey) ?? false;
 
-    final selectedMinutes = prefs.getInt(_selectedMinutesKey) ?? 60;
-    var remainingSeconds =
-        prefs.getInt(_remainingSecondsKey) ?? selectedMinutes * 60;
-    var isRunning = prefs.getBool(_isRunningKey) ?? false;
-    var warningShown = prefs.getBool(_warningShownKey) ?? false;
-
-    if (savedDate != today) {
-      remainingSeconds = selectedMinutes * 60;
-      isRunning = false;
-      warningShown = false;
-    } else if (isRunning) {
-      final lastUpdateMillis = prefs.getInt(_lastUpdateKey);
-      if (lastUpdateMillis != null) {
-        final lastUpdate =
-            DateTime.fromMillisecondsSinceEpoch(lastUpdateMillis);
-        final elapsed = now.difference(lastUpdate).inSeconds;
-        if (elapsed > 0) {
-          remainingSeconds = (remainingSeconds - elapsed).clamp(
-            0,
-            selectedMinutes * 60,
-          );
-        }
+    if (prefs.getString(_savedDateKey) != today) {
+      remaining = selected * 60;
+      running = false;
+      warned = false;
+    } else if (running) {
+      final savedMillis = prefs.getInt(_lastUpdateKey);
+      if (savedMillis != null) {
+        final elapsed = now
+            .difference(DateTime.fromMillisecondsSinceEpoch(savedMillis))
+            .inSeconds;
+        remaining = (remaining - elapsed).clamp(0, selected * 60).toInt();
       }
     }
 
     if (!mounted) return;
     setState(() {
-      _selectedMinutes = selectedMinutes;
-      _remainingSeconds = remainingSeconds;
-      _isRunning = isRunning && remainingSeconds > 0;
-      _fiveMinuteWarningShown = warningShown || remainingSeconds <= 300;
+      _selectedMinutes = selected;
+      _remainingSeconds = remaining;
+      _isRunning = running && remaining > 0;
+      _fiveMinuteWarningShown = warned || remaining <= 300;
       _isLoading = false;
     });
 
-    if (_isRunning) {
-      _startTicker();
-    }
-
+    if (_isRunning) _startTicker();
     await _saveState();
 
-    if (_remainingSeconds <= 0) {
+    if (_remainingSeconds == 0) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _showTimeFinishedDialog();
       });
@@ -140,13 +128,10 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
 
   Future<void> _refreshAfterReturn() async {
     if (_isLoading) return;
-
     final prefs = await SharedPreferences.getInstance();
     final now = DateTime.now();
-    final today = _dateKey(now);
-    final savedDate = prefs.getString(_savedDateKey);
 
-    if (savedDate != today) {
+    if (prefs.getString(_savedDateKey) != _dateKey(now)) {
       _timer?.cancel();
       setState(() {
         _remainingSeconds = _selectedMinutes * 60;
@@ -158,39 +143,34 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
     }
 
     if (!_isRunning) return;
+    final savedMillis = prefs.getInt(_lastUpdateKey);
+    if (savedMillis == null) return;
 
-    final lastUpdateMillis = prefs.getInt(_lastUpdateKey);
-    if (lastUpdateMillis == null) return;
-
-    final lastUpdate = DateTime.fromMillisecondsSinceEpoch(lastUpdateMillis);
-    final elapsed = now.difference(lastUpdate).inSeconds;
+    final elapsed = now
+        .difference(DateTime.fromMillisecondsSinceEpoch(savedMillis))
+        .inSeconds;
     if (elapsed <= 0) return;
 
-    final updated = (_remainingSeconds - elapsed).clamp(
-      0,
-      _selectedMinutes * 60,
-    );
-
+    final updated = (_remainingSeconds - elapsed)
+        .clamp(0, _selectedMinutes * 60)
+        .toInt();
     setState(() {
       _remainingSeconds = updated;
-      if (_remainingSeconds <= 0) {
-        _isRunning = false;
-      }
+      if (updated == 0) _isRunning = false;
     });
 
     if (_remainingSeconds <= 300 && !_fiveMinuteWarningShown) {
       _showFiveMinuteWarning();
     }
 
-    if (_remainingSeconds <= 0) {
+    if (_remainingSeconds == 0) {
       _timer?.cancel();
       await _saveState();
       await _showTimeFinishedDialog();
-      return;
+    } else {
+      _startTicker();
+      await _saveState();
     }
-
-    _startTicker();
-    await _saveState();
   }
 
   Future<void> _saveState() async {
@@ -219,14 +199,10 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
     if (_isRunning) {
       _timer?.cancel();
       setState(() => _isRunning = false);
-      await _saveState();
-      return;
+    } else if (_remainingSeconds > 0) {
+      setState(() => _isRunning = true);
+      _startTicker();
     }
-
-    if (_remainingSeconds <= 0) return;
-
-    setState(() => _isRunning = true);
-    _startTicker();
     await _saveState();
   }
 
@@ -237,7 +213,6 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
         timer.cancel();
         return;
       }
-
       if (_remainingSeconds <= 1) {
         timer.cancel();
         setState(() {
@@ -251,11 +226,9 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
 
       setState(() => _remainingSeconds--);
       _secondsSinceLastSave++;
-
       if (_remainingSeconds <= 300 && !_fiveMinuteWarningShown) {
         _showFiveMinuteWarning();
       }
-
       if (_secondsSinceLastSave >= 10) {
         _secondsSinceLastSave = 0;
         await _saveState();
@@ -317,12 +290,16 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
         '${seconds.toString().padLeft(2, '0')}';
   }
 
+  String _durationLabel(int minutes) {
+    if (minutes < 60) return '$minutes دقيقة';
+    if (minutes == 60) return 'ساعة';
+    return '${minutes ~/ 60} ساعة${minutes % 60 == 30 ? ' ونصف' : ''}';
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     return Scaffold(
@@ -339,10 +316,7 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
               style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'جميع التطبيقات تُحسب من رصيد واحد للهاتف بالكامل.',
-              style: TextStyle(fontSize: 15),
-            ),
+            const Text('جميع التطبيقات تُحسب من رصيد واحد للهاتف بالكامل.'),
             const SizedBox(height: 24),
             Card(
               child: Padding(
@@ -402,15 +376,9 @@ class _DailyTimeScreenState extends State<DailyTimeScreen>
               spacing: 10,
               runSpacing: 10,
               children: [30, 60, 90, 120, 180].map((minutes) {
-                final selected = _selectedMinutes == minutes;
-                final label = minutes < 60
-                    ? '$minutes دقيقة'
-                    : minutes == 60
-                        ? 'ساعة'
-                        : '${minutes ~/ 60} ساعة${minutes % 60 == 30 ? ' ونصف' : ''}';
                 return ChoiceChip(
-                  label: Text(label),
-                  selected: selected,
+                  label: Text(_durationLabel(minutes)),
+                  selected: _selectedMinutes == minutes,
                   onSelected: (_) => _setDailyMinutes(minutes),
                 );
               }).toList(),
