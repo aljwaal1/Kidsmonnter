@@ -41,6 +41,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   int _dailyMinutes = 60;
   int _usedSeconds = 0;
+  int _failedAttempts = 0;
   bool _enabled = false;
   bool _overlayAllowed = false;
   bool _hasPin = false;
@@ -72,6 +73,7 @@ class _HomeScreenState extends State<HomeScreen> {
         _enabled = status['enabled'] == true;
         _usedSeconds = (status['usedSeconds'] as num?)?.toInt() ?? 0;
         _dailyMinutes = (status['dailyMinutes'] as num?)?.toInt() ?? 60;
+        _failedAttempts = (status['failedAttempts'] as num?)?.toInt() ?? 0;
         _hasPin = status['hasPin'] == true;
         _overlayAllowed = overlay;
         _loading = false;
@@ -95,7 +97,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final first = TextEditingController();
     final second = TextEditingController();
     String? error;
-
     return showDialog<String>(
       context: context,
       barrierDismissible: false,
@@ -138,10 +139,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('إلغاء'),
-            ),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
             FilledButton(
               onPressed: () {
                 final pin = first.text.trim();
@@ -193,7 +191,8 @@ class _HomeScreenState extends State<HomeScreen> {
       try {
         await _channel.invokeMethod('stopProtection', {'pin': pin});
       } on PlatformException {
-        _message('رمز ولي الأمر غير صحيح.');
+        _message('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
+        await _loadStatus();
         return;
       }
     }
@@ -206,7 +205,8 @@ class _HomeScreenState extends State<HomeScreen> {
     if (pin == null) return;
     final verified = await _channel.invokeMethod<bool>('verifyPin', {'pin': pin}) ?? false;
     if (!verified) {
-      _message('رمز ولي الأمر غير صحيح.');
+      _message('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
+      await _loadStatus();
       return;
     }
     setState(() => _dailyMinutes = minutes);
@@ -224,7 +224,70 @@ class _HomeScreenState extends State<HomeScreen> {
       await _loadStatus();
       _message('تمت إضافة $minutes دقيقة.');
     } on PlatformException {
-      _message('رمز ولي الأمر غير صحيح.');
+      _message('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
+      await _loadStatus();
+    }
+  }
+
+  Future<void> _showFailedAttempts() async {
+    final raw = await _channel.invokeListMethod<dynamic>('getFailedAttempts') ?? const [];
+    if (!mounted) return;
+    final attempts = raw
+        .whereType<Map>()
+        .map((item) => {
+              'time': item['time']?.toString() ?? '',
+              'source': item['source']?.toString() ?? '',
+            })
+        .toList();
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('سجل المحاولات الفاشلة'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: attempts.isEmpty
+              ? const Text('لا توجد محاولات فاشلة مسجلة.')
+              : ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: attempts.length,
+                  separatorBuilder: (_, __) => const Divider(),
+                  itemBuilder: (context, index) {
+                    final item = attempts[index];
+                    return ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.warning_amber_rounded),
+                      title: Text(item['source']!),
+                      subtitle: Text(item['time']!, textDirection: TextDirection.ltr),
+                    );
+                  },
+                ),
+        ),
+        actions: [
+          if (attempts.isNotEmpty)
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                await _clearFailedAttempts();
+              },
+              child: const Text('مسح السجل'),
+            ),
+          FilledButton(onPressed: () => Navigator.pop(context), child: const Text('إغلاق')),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _clearFailedAttempts() async {
+    final pin = await _askPin(title: 'تأكيد مسح السجل');
+    if (pin == null) return;
+    try {
+      await _channel.invokeMethod('clearFailedAttempts', {'pin': pin});
+      await _loadStatus();
+      _message('تم مسح سجل المحاولات.');
+    } on PlatformException {
+      _message('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
+      await _loadStatus();
     }
   }
 
@@ -250,9 +313,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
+    if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator()));
 
     final scheme = Theme.of(context).colorScheme;
     final progress = _limitSeconds == 0
@@ -260,10 +321,7 @@ class _HomeScreenState extends State<HomeScreen> {
         : (_remainingSeconds / _limitSeconds).clamp(0.0, 1.0);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('حارس وقت الأطفال'),
-        centerTitle: true,
-      ),
+      appBar: AppBar(title: const Text('حارس وقت الأطفال'), centerTitle: true),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(18),
@@ -276,26 +334,19 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               child: Row(
                 children: [
-                  Icon(
-                    _enabled ? Icons.shield : Icons.shield_outlined,
-                    size: 42,
-                    color: _enabled ? scheme.primary : scheme.outline,
-                  ),
+                  Icon(_enabled ? Icons.shield : Icons.shield_outlined,
+                      size: 42, color: _enabled ? scheme.primary : scheme.outline),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          _enabled ? 'الحماية مفعّلة' : 'الحماية متوقفة',
-                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                        ),
+                        Text(_enabled ? 'الحماية مفعّلة' : 'الحماية متوقفة',
+                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                         const SizedBox(height: 4),
-                        Text(
-                          _enabled
-                              ? 'يُحسب وقت الشاشة تلقائيًا لجميع التطبيقات.'
-                              : 'فعّل الحماية لبدء احتساب استخدام الهاتف.',
-                        ),
+                        Text(_enabled
+                            ? 'يُحسب وقت الشاشة تلقائيًا لجميع التطبيقات.'
+                            : 'فعّل الحماية لبدء احتساب استخدام الهاتف.'),
                       ],
                     ),
                   ),
@@ -311,21 +362,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     const Text('الوقت المتبقي اليوم'),
                     const SizedBox(height: 10),
-                    Text(
-                      _format(_remainingSeconds),
-                      textDirection: TextDirection.ltr,
-                      style: const TextStyle(
-                        fontSize: 44,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 2,
-                      ),
-                    ),
+                    Text(_format(_remainingSeconds),
+                        textDirection: TextDirection.ltr,
+                        style: const TextStyle(fontSize: 44, fontWeight: FontWeight.w900, letterSpacing: 2)),
                     const SizedBox(height: 18),
-                    LinearProgressIndicator(
-                      value: progress,
-                      minHeight: 10,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
+                    LinearProgressIndicator(value: progress, minHeight: 10, borderRadius: BorderRadius.circular(10)),
                     const SizedBox(height: 12),
                     Text('المستخدم اليوم: ${_format(_usedSeconds)}'),
                   ],
@@ -340,8 +381,24 @@ class _HomeScreenState extends State<HomeScreen> {
                 subtitle: const Text('مطلوب لإيقاف الحماية أو تغيير المدة أو فتح القفل.'),
                 trailing: FilledButton.tonal(
                   onPressed: _ensurePin,
-                  child: Text(_hasPin ? 'تغيير لاحقًا' : 'إنشاء'),
+                  child: Text(_hasPin ? 'محفوظ' : 'إنشاء'),
                 ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Card(
+              child: ListTile(
+                leading: Badge(
+                  isLabelVisible: _failedAttempts > 0,
+                  label: Text('$_failedAttempts'),
+                  child: Icon(_failedAttempts > 0 ? Icons.gpp_maybe : Icons.verified_user_outlined),
+                ),
+                title: const Text('محاولات PIN الفاشلة'),
+                subtitle: Text(_failedAttempts == 0
+                    ? 'لا توجد محاولات مسجلة.'
+                    : 'تم تسجيل $_failedAttempts محاولة مع التاريخ والسبب.'),
+                trailing: const Icon(Icons.chevron_left),
+                onTap: _showFailedAttempts,
               ),
             ),
             const SizedBox(height: 18),
@@ -350,13 +407,13 @@ class _HomeScreenState extends State<HomeScreen> {
             Wrap(
               spacing: 10,
               runSpacing: 10,
-              children: [30, 60, 90, 120, 180].map((minutes) {
-                return ChoiceChip(
-                  label: Text(_durationLabel(minutes)),
-                  selected: _dailyMinutes == minutes,
-                  onSelected: (_) => _changeDuration(minutes),
-                );
-              }).toList(),
+              children: [30, 60, 90, 120, 180]
+                  .map((minutes) => ChoiceChip(
+                        label: Text(_durationLabel(minutes)),
+                        selected: _dailyMinutes == minutes,
+                        onSelected: (_) => _changeDuration(minutes),
+                      ))
+                  .toList(),
             ),
             const SizedBox(height: 18),
             if (_enabled)
@@ -388,9 +445,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   _overlayAllowed ? Icons.check_circle : Icons.warning_amber_rounded,
                   color: _overlayAllowed ? Colors.green : Colors.orange,
                 ),
-                title: Text(
-                  _overlayAllowed ? 'صلاحية شاشة القفل مفعّلة' : 'صلاحية شاشة القفل مطلوبة',
-                ),
+                title: Text(_overlayAllowed ? 'صلاحية شاشة القفل مفعّلة' : 'صلاحية شاشة القفل مطلوبة'),
                 subtitle: const Text('ضرورية لإظهار شاشة انتهاء الوقت فوق جميع التطبيقات.'),
                 trailing: _overlayAllowed
                     ? null
