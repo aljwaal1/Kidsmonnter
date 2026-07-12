@@ -1,6 +1,8 @@
 package com.explapp.kidstimeguard
 
 import android.app.*
+import android.app.admin.DeviceAdminReceiver
+import android.app.admin.DevicePolicyManager
 import android.content.*
 import android.graphics.Color
 import android.net.Uri
@@ -26,6 +28,24 @@ private const val MAX_FAILED_ATTEMPTS = 50
 private const val GUARD_CHANNEL_ID = "kidsmonnter_guard"
 private const val ALERT_CHANNEL_ID = "kidsmonnter_security_alerts"
 private const val NOTIFICATION_ID = 1001
+
+private fun Context.deviceAdminComponent() =
+    ComponentName(this, KidsMonnterDeviceAdminReceiver::class.java)
+
+private fun Context.isDeviceOwner(): Boolean =
+    (getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager)
+        .isDeviceOwnerApp(packageName)
+
+private fun Context.configureDeviceOwnerPolicies() {
+    val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+    if (!dpm.isDeviceOwnerApp(packageName)) return
+    val admin = deviceAdminComponent()
+    dpm.setLockTaskPackages(admin, arrayOf(packageName))
+    dpm.setUninstallBlocked(admin, packageName, true)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        dpm.setStatusBarDisabled(admin, true)
+    }
+}
 
 private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 private fun timestamp(): String = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
@@ -149,6 +169,22 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 val prefs = guardPrefs()
                 when (call.method) {
+                    "getDevicePolicyStatus" -> {
+                        val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                        result.success(mapOf(
+                            "deviceOwner" to dpm.isDeviceOwnerApp(packageName),
+                            "adminActive" to dpm.isAdminActive(deviceAdminComponent()),
+                            "lockTaskPermitted" to dpm.isLockTaskPermitted(packageName)
+                        ))
+                    }
+                    "configureDeviceOwner" -> {
+                        if (!isDeviceOwner()) {
+                            result.error("NOT_DEVICE_OWNER", "App is not provisioned as Device Owner", null)
+                        } else {
+                            configureDeviceOwnerPolicies()
+                            result.success(true)
+                        }
+                    }
                     "setPin" -> {
                         val pin = call.argument<String>("pin").orEmpty()
                         if (pin.length != 6 || pin.any { !it.isDigit() }) {
@@ -419,6 +455,9 @@ class LockActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureDeviceOwnerPolicies()
+        val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        if (dpm.isLockTaskPermitted(packageName)) startLockTask()
         window.addFlags(
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
@@ -557,6 +596,8 @@ class LockActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() = Unit
 }
+
+class KidsMonnterDeviceAdminReceiver : DeviceAdminReceiver()
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
