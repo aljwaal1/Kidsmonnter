@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'guard_diagnostics.dart';
+import 'guard_diagnostics_action.dart';
 import 'guard_diagnostics_presentation.dart';
 
 class GuardDiagnosticsCard extends StatelessWidget {
@@ -13,7 +14,7 @@ class GuardDiagnosticsCard extends StatelessWidget {
 
   final GuardDiagnostics diagnostics;
   final DateTime now;
-  final VoidCallback? onResolveIssue;
+  final ValueChanged<GuardDiagnosticAction>? onResolveIssue;
 
   @override
   Widget build(BuildContext context) {
@@ -22,6 +23,7 @@ class GuardDiagnosticsCard extends StatelessWidget {
       readiness,
       heartbeatAge: diagnostics.heartbeatAgeAt(now),
     );
+    final action = GuardDiagnosticActionResolver.forReadiness(readiness);
     final visual = _visualFor(context, presentation.tone);
 
     return Card(
@@ -46,12 +48,15 @@ class GuardDiagnosticsCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(presentation.message),
-                  if (presentation.actionRequired && onResolveIssue != null) ...[
+                  if (action != GuardDiagnosticAction.none &&
+                      onResolveIssue != null) ...[
                     const SizedBox(height: 12),
                     FilledButton.tonalIcon(
-                      onPressed: onResolveIssue,
-                      icon: const Icon(Icons.build_circle_outlined),
-                      label: const Text('معالجة المشكلة'),
+                      onPressed: () => onResolveIssue!(action),
+                      icon: Icon(_iconForAction(action)),
+                      label: Text(
+                        GuardDiagnosticActionResolver.labelFor(action),
+                      ),
                     ),
                   ],
                 ],
@@ -61,6 +66,19 @@ class GuardDiagnosticsCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  IconData _iconForAction(GuardDiagnosticAction action) {
+    switch (action) {
+      case GuardDiagnosticAction.none:
+        return Icons.check_circle_outline;
+      case GuardDiagnosticAction.refreshStatus:
+        return Icons.refresh;
+      case GuardDiagnosticAction.openOverlaySettings:
+        return Icons.layers_outlined;
+      case GuardDiagnosticAction.restartProtectionService:
+        return Icons.restart_alt;
+    }
   }
 
   _DiagnosticVisual _visualFor(
