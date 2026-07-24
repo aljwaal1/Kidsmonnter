@@ -3,6 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'guard_diagnostics_action.dart';
+import 'guard_diagnostics_card.dart';
+import 'guard_diagnostics_controller.dart';
+import 'guard_status.dart';
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const KidsMonnterApp());
@@ -20,6 +25,10 @@ class KidsMonnterApp extends StatelessWidget {
         useMaterial3: true,
         colorSchemeSeed: const Color(0xFF315F57),
         scaffoldBackgroundColor: const Color(0xFFF4F7F5),
+        cardTheme: const CardThemeData(
+          margin: EdgeInsets.zero,
+          clipBehavior: Clip.antiAlias,
+        ),
       ),
       home: const Directionality(
         textDirection: TextDirection.rtl,
@@ -29,36 +38,26 @@ class KidsMonnterApp extends StatelessWidget {
   }
 }
 
-class GuardStatus {
-  const GuardStatus({
-    required this.enabled,
-    required this.overlayAllowed,
-    required this.hasPin,
-    required this.usedSeconds,
-    required this.dailyMinutes,
-    required this.failedAttempts,
-    required this.parentEmail,
+class DevicePolicyStatus {
+  const DevicePolicyStatus({
+    required this.deviceOwner,
+    required this.adminActive,
+    required this.lockTaskPermitted,
   });
 
-  final bool enabled;
-  final bool overlayAllowed;
-  final bool hasPin;
-  final int usedSeconds;
-  final int dailyMinutes;
-  final int failedAttempts;
-  final String parentEmail;
+  final bool deviceOwner;
+  final bool adminActive;
+  final bool lockTaskPermitted;
 
-  factory GuardStatus.fromMap(Map<String, dynamic> map, bool overlayAllowed) {
-    return GuardStatus(
-      enabled: map['enabled'] == true,
-      overlayAllowed: overlayAllowed,
-      hasPin: map['hasPin'] == true,
-      usedSeconds: (map['usedSeconds'] as num?)?.toInt() ?? 0,
-      dailyMinutes: (map['dailyMinutes'] as num?)?.toInt() ?? 60,
-      failedAttempts: (map['failedAttempts'] as num?)?.toInt() ?? 0,
-      parentEmail: map['parentEmail']?.toString() ?? '',
+  factory DevicePolicyStatus.fromMap(Map<String, dynamic>? map) {
+    return DevicePolicyStatus(
+      deviceOwner: map?['deviceOwner'] == true,
+      adminActive: map?['adminActive'] == true,
+      lockTaskPermitted: map?['lockTaskPermitted'] == true,
     );
   }
+
+  bool get uninstallProtectionActive => deviceOwner;
 }
 
 class HomeScreen extends StatefulWidget {
@@ -73,9 +72,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   static const List<int> _durationOptions = <int>[10, 30, 60, 90, 120, 180];
 
   GuardStatus? _status;
+  DevicePolicyStatus _devicePolicy = const DevicePolicyStatus(
+    deviceOwner: false,
+    adminActive: false,
+    lockTaskPermitted: false,
+  );
   Timer? _refreshTimer;
   bool _busy = false;
   String? _error;
+
+  late final GuardDiagnosticsController _diagnosticsController =
+      GuardDiagnosticsController(
+    channel: _channel,
+    refreshStatus: _refreshStatus,
+  );
 
   @override
   void initState() {
@@ -105,10 +115,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _refreshStatus({bool silent = false}) async {
     try {
       final map = await _channel.invokeMapMethod<String, dynamic>('getStatus');
-      final overlay = await _channel.invokeMethod<bool>('canDrawOverlays') ?? false;
+      final policyMap =
+          await _channel.invokeMapMethod<String, dynamic>('getDevicePolicyStatus');
       if (!mounted || map == null) return;
+
+      final overlay = map['overlayAllowed'] == true ||
+          (await _channel.invokeMethod<bool>('canDrawOverlays') ?? false);
       setState(() {
         _status = GuardStatus.fromMap(map, overlay);
+        _devicePolicy = DevicePolicyStatus.fromMap(policyMap);
         _error = null;
       });
     } on PlatformException catch (error) {
@@ -221,7 +236,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     try {
       await _channel.invokeMethod('setPin', {'pin': pin});
       await _refreshStatus();
-      _showMessage('تم حفظ رمز ولي الأمر.');
+      _showMessage('تم حفظ رمز ولي الأمر بصورة آمنة.');
       return true;
     } on PlatformException catch (error) {
       _showMessage(error.message ?? 'تعذر حفظ الرمز.');
@@ -238,11 +253,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             'minutes': _status?.dailyMinutes ?? 60,
           });
           await _refreshStatus();
-          _showMessage('تم تفعيل الحماية والعداد يعمل الآن.');
+          _showMessage('تم تفعيل الحماية. احتساب الوقت يستمر خارج التطبيق.');
 
           if (_status?.overlayAllowed != true) {
             await _channel.invokeMethod('openOverlaySettings');
-            _showMessage('اسمح بالظهور فوق التطبيقات حتى تعمل شاشة القفل.');
+            _showMessage('امنح صلاحية الظهور فوق التطبيقات حتى تعمل شاشة القفل.');
           }
         } else {
           final pin = await _askPin(title: 'إيقاف الحماية');
@@ -266,7 +281,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (pin == null) return;
 
       try {
-        final valid = await _channel.invokeMethod<bool>('verifyPin', {'pin': pin}) ?? false;
+        final valid =
+            await _channel.invokeMethod<bool>('verifyPin', {'pin': pin}) ?? false;
         if (!valid) {
           _showMessage('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
           return;
@@ -304,7 +320,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final pin = await _askPin(title: 'تأكيد تغيير البريد');
     if (pin == null) return;
 
-    final valid = await _channel.invokeMethod<bool>('verifyPin', {'pin': pin}) ?? false;
+    final valid =
+        await _channel.invokeMethod<bool>('verifyPin', {'pin': pin}) ?? false;
     if (!valid) {
       _showMessage('رمز ولي الأمر غير صحيح.');
       return;
@@ -334,19 +351,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     );
     controller.dispose();
-    if (email == null || email.isEmpty) return;
+    if (email == null) return;
 
     try {
       await _channel.invokeMethod('setParentEmail', {'email': email});
       await _refreshStatus();
-      _showMessage('تم حفظ البريد.');
+      _showMessage(email.isEmpty ? 'تم حذف البريد.' : 'تم حفظ البريد.');
     } on PlatformException catch (error) {
       _showMessage(error.message ?? 'تعذر حفظ البريد.');
     }
   }
 
   Future<void> _showFailedAttempts() async {
-    final raw = await _channel.invokeListMethod<dynamic>('getFailedAttempts') ?? const [];
+    final raw =
+        await _channel.invokeListMethod<dynamic>('getFailedAttempts') ?? const [];
     if (!mounted) return;
     final attempts = raw.whereType<Map>().toList();
 
@@ -375,9 +393,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         actions: [
           if (attempts.isNotEmpty)
             TextButton.icon(
-              onPressed: () {
+              onPressed: () async {
                 Navigator.pop(dialogContext);
-                _channel.invokeMethod('sendSecurityReport');
+                try {
+                  await _channel.invokeMethod('sendSecurityReport');
+                } on PlatformException catch (error) {
+                  _showMessage(error.message ?? 'تعذر إرسال التقرير.');
+                }
               },
               icon: const Icon(Icons.email_outlined),
               label: const Text('إرسال التقرير'),
@@ -385,6 +407,80 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext),
             child: const Text('إغلاق'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _resolveDiagnosticAction(GuardDiagnosticAction action) async {
+    await _runBusy(() async {
+      try {
+        await _diagnosticsController.resolve(
+          action,
+          dailyMinutes: _status?.dailyMinutes ?? 60,
+        );
+        if (action == GuardDiagnosticAction.openOverlaySettings) {
+          _showMessage('فعّل صلاحية شاشة القفل ثم ارجع إلى التطبيق.');
+        } else if (action == GuardDiagnosticAction.restartProtectionService) {
+          _showMessage('تم طلب إعادة تشغيل خدمة الحماية.');
+        }
+      } on PlatformException catch (error) {
+        _showMessage(error.message ?? 'تعذر معالجة مشكلة الحماية.');
+      }
+    });
+  }
+
+  Future<void> _configureDeviceOwnerPolicies() async {
+    if (!_devicePolicy.deviceOwner) {
+      await _showDeviceOwnerInstructions();
+      return;
+    }
+
+    await _runBusy(() async {
+      try {
+        await _channel.invokeMethod('configureDeviceOwner');
+        await _refreshStatus();
+        _showMessage('تم تفعيل سياسات منع الحذف ووضع القفل.');
+      } on PlatformException catch (error) {
+        _showMessage(error.message ?? 'تعذر تطبيق سياسات الجهاز.');
+      }
+    });
+  }
+
+  Future<void> _showDeviceOwnerInstructions() async {
+    const command =
+        'adb shell dpm set-device-owner com.explapp.kidstimeguard/.KidsMonnterDeviceAdminReceiver';
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('تفعيل منع الحذف الكامل'),
+        content: const SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Android لا يسمح لتطبيق عادي بمنع حذفه. الحماية الكاملة تحتاج إعداد التطبيق كـ Device Owner على جهاز جديد أو بعد إعادة ضبط المصنع.',
+              ),
+              SizedBox(height: 12),
+              Text('بعد تثبيت التطبيق وقبل إضافة حسابات، نفّذ عبر الكمبيوتر:'),
+              SizedBox(height: 8),
+              SelectableText(
+                command,
+                textDirection: TextDirection.ltr,
+                style: TextStyle(fontFamily: 'monospace'),
+              ),
+              SizedBox(height: 12),
+              Text(
+                'عند نجاح الإعداد سيمنع النظام حذف التطبيق، ويسمح بوضع القفل المحكم. لا يمكن تفعيل ذلك بزر داخل التطبيق بسبب قيود Android الأمنية.',
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('فهمت'),
           ),
         ],
       ),
@@ -495,14 +591,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       children: [
                         Text(
                           status.enabled ? 'الحماية مفعّلة' : 'الحماية متوقفة',
-                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                         const SizedBox(height: 4),
                         Text(
                           status.enabled
-                              ? status.overlayAllowed
-                                  ? 'العداد وشاشة القفل جاهزان.'
-                                  : 'العداد يعمل، لكن صلاحية شاشة القفل ناقصة.'
+                              ? 'الوقت يُحتسب بواسطة خدمة Android حتى عند الخروج من التطبيق.'
                               : 'اختر المدة ثم فعّل الحماية.',
                         ),
                       ],
@@ -515,7 +612,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ],
               ),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 14),
+            GuardDiagnosticsCard(
+              diagnostics: status.diagnostics,
+              now: DateTime.now(),
+              onResolveIssue: (action) {
+                _resolveDiagnosticAction(action);
+              },
+            ),
+            const SizedBox(height: 14),
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(22),
@@ -562,10 +667,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               }).toList(),
             ),
             const SizedBox(height: 18),
+            _buildUninstallProtectionCard(status),
+            const SizedBox(height: 10),
             Card(
               child: ListTile(
                 leading: Icon(status.hasPin ? Icons.lock : Icons.lock_open),
-                title: Text(status.hasPin ? 'رمز ولي الأمر محفوظ' : 'أنشئ رمز ولي الأمر'),
+                title: Text(
+                  status.hasPin ? 'رمز ولي الأمر محفوظ' : 'أنشئ رمز ولي الأمر',
+                ),
                 subtitle: const Text('مطلوب لتغيير المدة أو إيقاف الحماية.'),
                 trailing: FilledButton.tonal(
                   onPressed: _busy ? null : _ensurePin,
@@ -579,7 +688,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 leading: const Icon(Icons.alternate_email),
                 title: const Text('بريد ولي الأمر'),
                 subtitle: Text(
-                  status.parentEmail.isEmpty ? 'لم يتم تحديد بريد.' : status.parentEmail,
+                  status.parentEmail.isEmpty
+                      ? 'لم يتم تحديد بريد.'
+                      : status.parentEmail,
                   textDirection: TextDirection.ltr,
                 ),
                 onTap: _busy ? null : _editParentEmail,
@@ -606,7 +717,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('إضافة وقت', style: TextStyle(fontWeight: FontWeight.bold)),
+                      const Text(
+                        'إضافة وقت',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
                       const SizedBox(height: 10),
                       Wrap(
                         spacing: 8,
@@ -614,7 +728,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         children: [10, 15, 30, 60]
                             .map(
                               (minutes) => OutlinedButton(
-                                onPressed: _busy ? null : () => _addTime(minutes),
+                                onPressed:
+                                    _busy ? null : () => _addTime(minutes),
                                 child: Text('+$minutes دقيقة'),
                               ),
                             )
@@ -629,7 +744,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Card(
               child: ListTile(
                 leading: Icon(
-                  status.overlayAllowed ? Icons.check_circle : Icons.warning_amber_rounded,
+                  status.overlayAllowed
+                      ? Icons.check_circle
+                      : Icons.warning_amber_rounded,
                   color: status.overlayAllowed ? Colors.green : Colors.orange,
                 ),
                 title: Text(
@@ -640,15 +757,79 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 subtitle: Text(
                   status.overlayAllowed
                       ? 'يمكن عرض شاشة القفل عند انتهاء الوقت.'
-                      : 'العداد قد يعمل، لكن القفل لن يظهر قبل منح الصلاحية.',
+                      : 'العداد يعمل، لكن القفل لن يظهر قبل منح الصلاحية.',
                 ),
                 trailing: status.overlayAllowed
                     ? null
                     : FilledButton.tonal(
-                        onPressed: () => _channel.invokeMethod('openOverlaySettings'),
+                        onPressed: _busy
+                            ? null
+                            : () => _channel
+                                .invokeMethod<void>('openOverlaySettings'),
                         child: const Text('تفعيل'),
                       ),
               ),
+            ),
+            const SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUninstallProtectionCard(GuardStatus status) {
+    final active = _devicePolicy.uninstallProtectionActive;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  active ? Icons.phonelink_lock : Icons.mobile_off_outlined,
+                  color: active ? Colors.green : Colors.orange,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    active ? 'الحماية ضد الحذف فعّالة' : 'الحماية ضد الحذف غير فعّالة',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 17,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              active
+                  ? 'التطبيق مضبوط كـ Device Owner ويمكن للنظام منع حذفه وتفعيل القفل المحكم.'
+                  : 'التطبيق العادي لا يستطيع منع حذفه. يلزم إعداد Device Owner مرة واحدة عبر الكمبيوتر.',
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: _busy ? null : _configureDeviceOwnerPolicies,
+                  icon: Icon(active ? Icons.security : Icons.info_outline),
+                  label: Text(active ? 'تطبيق السياسات' : 'طريقة التفعيل'),
+                ),
+                if (_devicePolicy.adminActive)
+                  const Chip(
+                    avatar: Icon(Icons.admin_panel_settings, size: 18),
+                    label: Text('مسؤول الجهاز مفعّل'),
+                  ),
+                if (_devicePolicy.lockTaskPermitted)
+                  const Chip(
+                    avatar: Icon(Icons.lock_person, size: 18),
+                    label: Text('وضع القفل مسموح'),
+                  ),
+              ],
             ),
           ],
         ),
