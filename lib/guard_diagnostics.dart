@@ -21,6 +21,7 @@ class GuardDiagnostics {
   });
 
   static const Duration healthyHeartbeatWindow = Duration(seconds: 15);
+  static const Duration allowedFutureClockSkew = Duration(seconds: 5);
 
   final bool protectionEnabled;
   final bool overlayAllowed;
@@ -33,6 +34,9 @@ class GuardDiagnostics {
     final heartbeat = DateTime.fromMillisecondsSinceEpoch(serviceHeartbeatMs);
     final age = now.difference(heartbeat);
 
+    if (age < -allowedFutureClockSkew) {
+      return GuardServiceHealth.stale;
+    }
     if (age.isNegative || age <= healthyHeartbeatWindow) {
       return GuardServiceHealth.healthy;
     }
