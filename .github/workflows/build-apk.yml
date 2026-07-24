@@ -37,7 +37,7 @@ jobs:
       - name: Install native monitoring files
         run: |
           mkdir -p android/app/src/main/kotlin/com/explapp/kidstimeguard
-          cp native/MainActivity.kt android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
+          cp native/MainActivityV2.kt android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
           cp native/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
           mkdir -p android/app/src/main/res/xml android/app/src/main/res/values
           cp native/res/xml/device_admin_receiver.xml android/app/src/main/res/xml/device_admin_receiver.xml
