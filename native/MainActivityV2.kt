@@ -31,6 +31,10 @@ private const val PIN_HASH_KEY = "parent_pin_hash"
 private const val LEGACY_PIN_KEY = "parent_pin"
 private const val LAST_TICK_KEY = "last_tick_elapsed_ms"
 private const val HEARTBEAT_KEY = "service_heartbeat_ms"
+private const val MONITOR_WATCHDOG_ACTION = "com.explapp.kidstimeguard.RESTART_MONITOR"
+private const val WATCHDOG_REQUEST_CODE = 991
+private const val WATCHDOG_INTERVAL_MS = 60_000L
+private const val STALE_HEARTBEAT_MS = 30_000L
 private const val MAX_FAILED_ATTEMPTS = 50
 
 private fun Context.guardPrefs(): SharedPreferences =
@@ -64,6 +68,20 @@ private fun verifyPin(prefs: SharedPreferences, candidate: String): Boolean {
 private fun Context.startMonitorServiceSafely() {
     val intent = Intent(this, MonitorService::class.java)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+}
+
+private fun Context.scheduleMonitorWatchdog(delayMs: Long = WATCHDOG_INTERVAL_MS) {
+    val pending = PendingIntent.getBroadcast(
+        this,
+        WATCHDOG_REQUEST_CODE,
+        Intent(this, BootReceiver::class.java).setAction(MONITOR_WATCHDOG_ACTION),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+    (getSystemService(Context.ALARM_SERVICE) as AlarmManager).setAndAllowWhileIdle(
+        AlarmManager.ELAPSED_REALTIME_WAKEUP,
+        SystemClock.elapsedRealtime() + delayMs,
+        pending,
+    )
 }
 
 private fun Context.deviceAdminComponent() =
@@ -311,6 +329,7 @@ class MonitorService : Service() {
         })
         resetClockAnchor()
         startForeground(NOTIFICATION_ID, buildGuardNotification("الحماية تعمل الآن"))
+        scheduleMonitorWatchdog()
         handler.post(ticker)
     }
 
@@ -337,15 +356,7 @@ class MonitorService : Service() {
 
     private fun scheduleRestart() {
         if (!prefs.getBoolean("enabled", false)) return
-        val pending = PendingIntent.getService(
-            this, 991, Intent(this, MonitorService::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        (getSystemService(ALARM_SERVICE) as AlarmManager).setAndAllowWhileIdle(
-            AlarmManager.ELAPSED_REALTIME_WAKEUP,
-            SystemClock.elapsedRealtime() + 2000L,
-            pending
-        )
+        scheduleMonitorWatchdog(2_000L)
     }
 
     private fun resetClockAnchor() {
@@ -566,6 +577,13 @@ class KidsMonnterDeviceAdminReceiver : DeviceAdminReceiver()
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val prefs = context.guardPrefs()
-        if (prefs.getBoolean("enabled", false)) context.startMonitorServiceSafely()
+        if (!prefs.getBoolean("enabled", false)) return
+
+        val isWatchdog = intent?.action == MONITOR_WATCHDOG_ACTION
+        val heartbeatAge = System.currentTimeMillis() - prefs.getLong(HEARTBEAT_KEY, 0L)
+        val serviceNeedsRestart = !isWatchdog || heartbeatAge < 0L || heartbeatAge > STALE_HEARTBEAT_MS
+
+        if (serviceNeedsRestart) context.startMonitorServiceSafely()
+        context.scheduleMonitorWatchdog()
     }
 }
