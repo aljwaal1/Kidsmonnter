@@ -209,6 +209,14 @@ class MainActivity : FlutterActivity() {
                     startMonitorServiceSafely()
                     result.success(true)
                 }
+                "restartProtectionService" -> {
+                    if (!prefs.getBoolean("enabled", false)) {
+                        result.error("PROTECTION_DISABLED", "الحماية غير مفعلة", null)
+                    } else {
+                        startMonitorServiceSafely()
+                        result.success(true)
+                    }
+                }
                 "stopProtection" -> {
                     val pin = call.argument<String>("pin").orEmpty()
                     if (!verifyPin(prefs, pin)) {
