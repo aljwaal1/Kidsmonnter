@@ -33,8 +33,9 @@ void main() {
       );
     });
 
-    test('restores protection after boot, update, or task removal', () {
+    test('restores protection after boot, unlock, update, or task removal', () {
       expect(manifest, contains('android.intent.action.BOOT_COMPLETED'));
+      expect(manifest, contains('android.intent.action.USER_UNLOCKED'));
       expect(manifest, contains('android.intent.action.MY_PACKAGE_REPLACED'));
       expect(nativeEngine, contains('return START_STICKY'));
       expect(nativeEngine, contains('override fun onTaskRemoved'));
@@ -44,13 +45,19 @@ void main() {
     test('accounts elapsed screen-on time outside the Flutter UI', () {
       expect(nativeEngine, contains('SystemClock.elapsedRealtime()'));
       expect(nativeEngine, contains('private fun accountElapsedUsage()'));
-      expect(nativeEngine, contains('if (!screenOn || !prefs.getBoolean("enabled", false)) return'));
+      expect(
+        nativeEngine,
+        contains('if (!screenOn || !prefs.getBoolean("enabled", false)) return'),
+      );
       expect(nativeEngine, contains('.putInt("used_seconds", after)'));
     });
 
     test('keeps uninstall protection limited to device-owner mode', () {
       expect(nativeEngine, contains('isDeviceOwnerApp(packageName)'));
-      expect(nativeEngine, contains('setUninstallBlocked(admin, packageName, true)'));
+      expect(
+        nativeEngine,
+        contains('setUninstallBlocked(admin, packageName, true)'),
+      );
       expect(manifest, contains('android.permission.BIND_DEVICE_ADMIN'));
     });
   });
