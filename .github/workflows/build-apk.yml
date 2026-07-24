@@ -46,9 +46,6 @@ jobs:
           sed -i 's/com.explapp.kidsmonnter/com.explapp.kidstimeguard/g' android/app/build.gradle.kts || true
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts || true
 
-      - name: Apply activation fix
-        run: python3 tool/fix_activation.py
-
       - name: Install packages
         run: flutter pub get
 
