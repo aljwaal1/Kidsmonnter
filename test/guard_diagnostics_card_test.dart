@@ -5,7 +5,7 @@ import 'package:kidsmonnter/guard_diagnostics_action.dart';
 import 'package:kidsmonnter/guard_diagnostics_card.dart';
 
 void main() {
-  final now = DateTime.fromMillisecondsSinceEpoch(2_000_000);
+  final now = DateTime.fromMillisecondsSinceEpoch(2000000);
 
   Widget buildCard(
     GuardDiagnostics diagnostics, {
@@ -31,7 +31,7 @@ void main() {
         GuardDiagnostics(
           protectionEnabled: true,
           overlayAllowed: true,
-          serviceHeartbeatMs: now.millisecondsSinceEpoch - 5_000,
+          serviceHeartbeatMs: now.millisecondsSinceEpoch - 5000,
         ),
       ),
     );
@@ -48,7 +48,7 @@ void main() {
         GuardDiagnostics(
           protectionEnabled: true,
           overlayAllowed: false,
-          serviceHeartbeatMs: now.millisecondsSinceEpoch - 2_000,
+          serviceHeartbeatMs: now.millisecondsSinceEpoch - 2000,
         ),
         onResolveIssue: (action) => receivedAction = action,
       ),
@@ -69,7 +69,7 @@ void main() {
         GuardDiagnostics(
           protectionEnabled: true,
           overlayAllowed: true,
-          serviceHeartbeatMs: now.millisecondsSinceEpoch - 20_000,
+          serviceHeartbeatMs: now.millisecondsSinceEpoch - 20000,
         ),
         onResolveIssue: (action) => receivedAction = action,
       ),
