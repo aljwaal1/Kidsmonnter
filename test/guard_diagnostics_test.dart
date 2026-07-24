@@ -85,15 +85,35 @@ void main() {
       expect(value.isReadyAt(now), isFalse);
     });
 
-    test('treats a future heartbeat as healthy without negative age', () {
+    test('accepts a small future heartbeat within clock-skew tolerance', () {
       final value = diagnostics(
         enabled: true,
         overlayAllowed: true,
-        heartbeatMs: now.add(const Duration(seconds: 5)).millisecondsSinceEpoch,
+        heartbeatMs: now
+            .add(GuardDiagnostics.allowedFutureClockSkew)
+            .millisecondsSinceEpoch,
       );
 
       expect(value.serviceHealthAt(now), GuardServiceHealth.healthy);
       expect(value.readinessAt(now), GuardReadiness.ready);
+      expect(value.heartbeatAgeAt(now), Duration.zero);
+    });
+
+    test('rejects a heartbeat too far in the future', () {
+      final value = diagnostics(
+        enabled: true,
+        overlayAllowed: true,
+        heartbeatMs: now
+            .add(
+              GuardDiagnostics.allowedFutureClockSkew +
+                  const Duration(milliseconds: 1),
+            )
+            .millisecondsSinceEpoch,
+      );
+
+      expect(value.serviceHealthAt(now), GuardServiceHealth.stale);
+      expect(value.readinessAt(now), GuardReadiness.serviceStale);
+      expect(value.isReadyAt(now), isFalse);
       expect(value.heartbeatAgeAt(now), Duration.zero);
     });
 
@@ -109,7 +129,10 @@ void main() {
         enabled: true,
         overlayAllowed: true,
         heartbeatMs: now
-            .subtract(GuardDiagnostics.healthyHeartbeatWindow + const Duration(milliseconds: 1))
+            .subtract(
+              GuardDiagnostics.healthyHeartbeatWindow +
+                  const Duration(milliseconds: 1),
+            )
             .millisecondsSinceEpoch,
       );
 
