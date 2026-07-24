@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths-ignore:
+      - 'apk/**'
+      - 'DOWNLOAD_APK.md'
 
 permissions:
   contents: write
