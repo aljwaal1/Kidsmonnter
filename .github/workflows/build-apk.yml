@@ -31,6 +31,9 @@ jobs:
       - name: Merge status self-heal into native source
         run: python3 tools/merge_status_self_heal.py
 
+      - name: Merge notification permission request
+        run: python3 tools/merge_notification_permission.py
+
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -56,12 +59,15 @@ jobs:
           test -f test/guard_status_test.dart
           test -f test/service_watchdog_contract_test.dart
           test -f test/status_self_heal_contract_test.dart
+          test -f test/notification_permission_contract_test.dart
           grep -q 'uninstallBlocked' lib/main.dart
           grep -q 'isUninstallBlocked' native/MainActivityV2.kt
           grep -q 'PendingIntent.getBroadcast' native/MainActivityV2.kt
           grep -q 'MONITOR_WATCHDOG_ACTION' native/MainActivityV2.kt
           grep -q '"restartProtectionService"' native/MainActivityV2.kt
           grep -q 'shouldRecoverProtectionService' native/MainActivityV2.kt
+          grep -q 'requestNotificationPermissionIfNeeded' native/MainActivityV2.kt
+          grep -q 'Manifest.permission.POST_NOTIFICATIONS' native/MainActivityV2.kt
           ! grep -q 'PendingIntent.getService' native/MainActivityV2.kt
           mkdir -p android/app/src/main/kotlin/com/explapp/kidstimeguard
           cp native/MainActivityV2.kt android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
@@ -99,5 +105,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add lib/main.dart native/MainActivityV2.kt apk/KidsMonnter.apk DOWNLOAD_APK.md
-          git diff --cached --quiet || git commit -m "دمج الاستعادة التلقائية للخدمة وتحديث ملف APK"
+          git diff --cached --quiet || git commit -m "دمج إذن إشعارات الحماية وتحديث ملف APK"
           git push
