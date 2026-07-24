@@ -65,25 +65,26 @@ void main() {
     expect(refreshCount, 0);
   });
 
-  test('restartProtectionService reuses startProtection and refreshes', () async {
+  test('restartProtectionService invokes only the dedicated native method',
+      () async {
     await createController().resolve(
       GuardDiagnosticAction.restartProtectionService,
       dailyMinutes: 90,
     );
 
     expect(calls, hasLength(1));
-    expect(calls.single.method, 'startProtection');
-    expect(calls.single.arguments, <String, Object>{'minutes': 90});
+    expect(calls.single.method, 'restartProtectionService');
+    expect(calls.single.arguments, isNull);
     expect(refreshCount, 1);
   });
 
-  test('restartProtectionService clamps an invalid duration safely', () async {
+  test('restartProtectionService does not reuse startProtection', () async {
     await createController().resolve(
       GuardDiagnosticAction.restartProtectionService,
       dailyMinutes: 0,
     );
 
-    expect(calls.single.arguments, <String, Object>{'minutes': 1});
+    expect(calls.map((call) => call.method), isNot(contains('startProtection')));
     expect(refreshCount, 1);
   });
 }
