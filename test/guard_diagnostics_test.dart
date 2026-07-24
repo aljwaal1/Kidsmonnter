@@ -4,7 +4,7 @@ import '../lib/guard_diagnostics.dart';
 
 void main() {
   group('GuardDiagnostics', () {
-    final now = DateTime.fromMillisecondsSinceEpoch(2_000_000);
+    final now = DateTime.fromMillisecondsSinceEpoch(2000000);
 
     GuardDiagnostics diagnostics({
       required bool enabled,
