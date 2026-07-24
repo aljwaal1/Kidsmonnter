@@ -43,21 +43,25 @@ class DevicePolicyStatus {
     required this.deviceOwner,
     required this.adminActive,
     required this.lockTaskPermitted,
+    required this.uninstallBlocked,
   });
 
   final bool deviceOwner;
   final bool adminActive;
   final bool lockTaskPermitted;
+  final bool uninstallBlocked;
 
   factory DevicePolicyStatus.fromMap(Map<String, dynamic>? map) {
     return DevicePolicyStatus(
       deviceOwner: map?['deviceOwner'] == true,
       adminActive: map?['adminActive'] == true,
       lockTaskPermitted: map?['lockTaskPermitted'] == true,
+      uninstallBlocked: map?['uninstallBlocked'] == true,
     );
   }
 
-  bool get uninstallProtectionActive => deviceOwner;
+  bool get uninstallProtectionActive =>
+      deviceOwner && adminActive && uninstallBlocked;
 }
 
 class HomeScreen extends StatefulWidget {
@@ -76,6 +80,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     deviceOwner: false,
     adminActive: false,
     lockTaskPermitted: false,
+    uninstallBlocked: false,
   );
   Timer? _refreshTimer;
   bool _busy = false;
@@ -115,8 +120,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _refreshStatus({bool silent = false}) async {
     try {
       final map = await _channel.invokeMapMethod<String, dynamic>('getStatus');
-      final policyMap =
-          await _channel.invokeMapMethod<String, dynamic>('getDevicePolicyStatus');
+      final policyMap = await _channel
+          .invokeMapMethod<String, dynamic>('getDevicePolicyStatus');
       if (!mounted || map == null) return;
 
       final overlay = map['overlayAllowed'] == true ||
@@ -212,7 +217,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   return;
                 }
                 if (confirm && pin != second.text.trim()) {
-                  setDialogState(() => validationError = 'الرمزان غير متطابقين.');
+                  setDialogState(
+                      () => validationError = 'الرمزان غير متطابقين.');
                   return;
                 }
                 Navigator.pop(dialogContext, pin);
@@ -257,7 +263,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
           if (_status?.overlayAllowed != true) {
             await _channel.invokeMethod('openOverlaySettings');
-            _showMessage('امنح صلاحية الظهور فوق التطبيقات حتى تعمل شاشة القفل.');
+            _showMessage(
+                'امنح صلاحية الظهور فوق التطبيقات حتى تعمل شاشة القفل.');
           }
         } else {
           final pin = await _askPin(title: 'إيقاف الحماية');
@@ -277,12 +284,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (minutes == _status?.dailyMinutes) return;
     await _runBusy(() async {
       if (!await _ensurePin()) return;
-      final pin = await _askPin(title: 'تأكيد اختيار ${_durationLabel(minutes)}');
+      final pin =
+          await _askPin(title: 'تأكيد اختيار ${_durationLabel(minutes)}');
       if (pin == null) return;
 
       try {
         final valid =
-            await _channel.invokeMethod<bool>('verifyPin', {'pin': pin}) ?? false;
+            await _channel.invokeMethod<bool>('verifyPin', {'pin': pin}) ??
+                false;
         if (!valid) {
           _showMessage('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
           return;
@@ -306,7 +315,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final pin = await _askPin(title: 'إضافة $minutes دقيقة');
       if (pin == null) return;
       try {
-        await _channel.invokeMethod('addTime', {'pin': pin, 'minutes': minutes});
+        await _channel
+            .invokeMethod('addTime', {'pin': pin, 'minutes': minutes});
         await _refreshStatus();
         _showMessage('تمت إضافة $minutes دقيقة.');
       } on PlatformException catch (error) {
@@ -344,7 +354,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             child: const Text('إلغاء'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, controller.text.trim()),
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
             child: const Text('حفظ'),
           ),
         ],
@@ -363,8 +374,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _showFailedAttempts() async {
-    final raw =
-        await _channel.invokeListMethod<dynamic>('getFailedAttempts') ?? const [];
+    final raw = await _channel.invokeListMethod<dynamic>('getFailedAttempts') ??
+        const [];
     if (!mounted) return;
     final attempts = raw.whereType<Map>().toList();
 
@@ -626,7 +637,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 padding: const EdgeInsets.all(22),
                 child: Column(
                   children: [
-                    Text('المدة المعتمدة: ${_durationLabel(status.dailyMinutes)}'),
+                    Text(
+                        'المدة المعتمدة: ${_durationLabel(status.dailyMinutes)}'),
                     const SizedBox(height: 10),
                     Text(
                       _format(_remainingSeconds),
@@ -794,7 +806,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    active ? 'الحماية ضد الحذف فعّالة' : 'الحماية ضد الحذف غير فعّالة',
+                    active
+                        ? 'الحماية ضد الحذف فعّالة'
+                        : 'الحماية ضد الحذف غير فعّالة',
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 17,

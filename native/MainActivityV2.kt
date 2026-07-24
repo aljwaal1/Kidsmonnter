@@ -233,10 +233,22 @@ class MainActivity : FlutterActivity() {
                 "canDrawOverlays" -> result.success(Settings.canDrawOverlays(this))
                 "getDevicePolicyStatus" -> {
                     val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                    val admin = deviceAdminComponent()
+                    val deviceOwner = dpm.isDeviceOwnerApp(packageName)
+                    val uninstallBlocked = if (deviceOwner) {
+                        try {
+                            dpm.isUninstallBlocked(admin, packageName)
+                        } catch (_: SecurityException) {
+                            false
+                        }
+                    } else {
+                        false
+                    }
                     result.success(mapOf(
-                        "deviceOwner" to dpm.isDeviceOwnerApp(packageName),
-                        "adminActive" to dpm.isAdminActive(deviceAdminComponent()),
-                        "lockTaskPermitted" to dpm.isLockTaskPermitted(packageName)
+                        "deviceOwner" to deviceOwner,
+                        "adminActive" to dpm.isAdminActive(admin),
+                        "lockTaskPermitted" to dpm.isLockTaskPermitted(packageName),
+                        "uninstallBlocked" to uninstallBlocked
                     ))
                 }
                 "configureDeviceOwner" -> {
