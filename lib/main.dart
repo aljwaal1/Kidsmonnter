@@ -29,6 +29,38 @@ class KidsMonnterApp extends StatelessWidget {
   }
 }
 
+class GuardStatus {
+  const GuardStatus({
+    required this.enabled,
+    required this.overlayAllowed,
+    required this.hasPin,
+    required this.usedSeconds,
+    required this.dailyMinutes,
+    required this.failedAttempts,
+    required this.parentEmail,
+  });
+
+  final bool enabled;
+  final bool overlayAllowed;
+  final bool hasPin;
+  final int usedSeconds;
+  final int dailyMinutes;
+  final int failedAttempts;
+  final String parentEmail;
+
+  factory GuardStatus.fromMap(Map<String, dynamic> map, bool overlayAllowed) {
+    return GuardStatus(
+      enabled: map['enabled'] == true,
+      overlayAllowed: overlayAllowed,
+      hasPin: map['hasPin'] == true,
+      usedSeconds: (map['usedSeconds'] as num?)?.toInt() ?? 0,
+      dailyMinutes: (map['dailyMinutes'] as num?)?.toInt() ?? 60,
+      failedAttempts: (map['failedAttempts'] as num?)?.toInt() ?? 0,
+      parentEmail: map['parentEmail']?.toString() ?? '',
+    );
+  }
+}
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -36,59 +68,67 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  static const _channel = MethodChannel('kidsmonnter/control');
-  static const _durationOptions = <int>[10, 30, 60, 90, 120, 180];
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
+  static const MethodChannel _channel = MethodChannel('kidsmonnter/control');
+  static const List<int> _durationOptions = <int>[10, 30, 60, 90, 120, 180];
 
-  int _dailyMinutes = 60;
-  int _usedSeconds = 0;
-  int _failedAttempts = 0;
-  bool _enabled = false;
-  bool _overlayAllowed = false;
-  bool _hasPin = false;
-  bool _loading = true;
-  bool _savingDuration = false;
-  String _parentEmail = '';
+  GuardStatus? _status;
   Timer? _refreshTimer;
+  bool _busy = false;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _loadStatus();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshStatus();
     _refreshTimer = Timer.periodic(
-      const Duration(seconds: 2),
-      (_) => _loadStatus(silent: true),
+      const Duration(seconds: 5),
+      (_) => _refreshStatus(silent: true),
     );
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
     super.dispose();
   }
 
-  Future<void> _loadStatus({bool silent = false}) async {
-    try {
-      final status = await _channel.invokeMapMethod<String, dynamic>('getStatus');
-      final overlay = await _channel.invokeMethod<bool>('canDrawOverlays') ?? false;
-      if (!mounted || status == null) return;
-      setState(() {
-        _enabled = status['enabled'] == true;
-        _usedSeconds = (status['usedSeconds'] as num?)?.toInt() ?? 0;
-        _dailyMinutes = (status['dailyMinutes'] as num?)?.toInt() ?? 60;
-        _failedAttempts = (status['failedAttempts'] as num?)?.toInt() ?? 0;
-        _hasPin = status['hasPin'] == true;
-        _parentEmail = status['parentEmail']?.toString() ?? '';
-        _overlayAllowed = overlay;
-        _loading = false;
-      });
-    } on PlatformException catch (error) {
-      if (!silent) _message('تعذر قراءة حالة الحماية: ${error.message ?? ''}');
-      if (mounted) setState(() => _loading = false);
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshStatus();
     }
   }
 
-  void _message(String text) {
+  Future<void> _refreshStatus({bool silent = false}) async {
+    try {
+      final map = await _channel.invokeMapMethod<String, dynamic>('getStatus');
+      final overlay = await _channel.invokeMethod<bool>('canDrawOverlays') ?? false;
+      if (!mounted || map == null) return;
+      setState(() {
+        _status = GuardStatus.fromMap(map, overlay);
+        _error = null;
+      });
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.message ?? 'تعذر قراءة حالة الحماية.');
+      if (!silent) _showMessage(_error!);
+    }
+  }
+
+  Future<T?> _runBusy<T>(Future<T> Function() action) async {
+    if (_busy) return null;
+    setState(() => _busy = true);
+    try {
+      return await action();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _showMessage(String text) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -98,11 +138,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<String?> _askPin({required String title, bool confirm = false}) async {
     final first = TextEditingController();
     final second = TextEditingController();
-    String? error;
-    return showDialog<String>(
+    String? validationError;
+
+    final result = await showDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => StatefulBuilder(
+      builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
           title: Text(title),
           content: Column(
@@ -134,29 +175,32 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ],
-              if (error != null) ...[
-                const SizedBox(height: 10),
-                Text(error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              if (validationError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  validationError!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
               ],
             ],
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.pop(dialogContext),
               child: const Text('إلغاء'),
             ),
             FilledButton(
               onPressed: () {
                 final pin = first.text.trim();
                 if (pin.length != 6 || int.tryParse(pin) == null) {
-                  setDialogState(() => error = 'أدخل 6 أرقام صحيحة.');
+                  setDialogState(() => validationError = 'أدخل 6 أرقام صحيحة.');
                   return;
                 }
                 if (confirm && pin != second.text.trim()) {
-                  setDialogState(() => error = 'الرمزان غير متطابقين.');
+                  setDialogState(() => validationError = 'الرمزان غير متطابقين.');
                   return;
                 }
-                Navigator.pop(context, pin);
+                Navigator.pop(dialogContext, pin);
               },
               child: const Text('متابعة'),
             ),
@@ -164,100 +208,112 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
+
+    first.dispose();
+    second.dispose();
+    return result;
   }
 
   Future<bool> _ensurePin() async {
-    if (_hasPin) return true;
+    if (_status?.hasPin == true) return true;
     final pin = await _askPin(title: 'إنشاء رمز ولي الأمر', confirm: true);
     if (pin == null) return false;
     try {
       await _channel.invokeMethod('setPin', {'pin': pin});
-      await _loadStatus();
-      _message('تم حفظ رمز ولي الأمر.');
+      await _refreshStatus();
+      _showMessage('تم حفظ رمز ولي الأمر.');
       return true;
     } on PlatformException catch (error) {
-      _message(error.message ?? 'تعذر حفظ الرمز.');
+      _showMessage(error.message ?? 'تعذر حفظ الرمز.');
       return false;
     }
   }
 
-  Future<void> _setProtection(bool value) async {
-    if (value) {
-      if (!await _ensurePin()) return;
-      if (!_overlayAllowed) {
-        await _channel.invokeMethod('openOverlaySettings');
-        _message('فعّل الظهور فوق التطبيقات، ثم ارجع واضغط تفعيل.');
-        return;
-      }
-      await _channel.invokeMethod('startProtection', {'minutes': _dailyMinutes});
-    } else {
-      final pin = await _askPin(title: 'إيقاف الحماية');
-      if (pin == null) return;
+  Future<void> _setProtection(bool enabled) async {
+    await _runBusy(() async {
       try {
-        await _channel.invokeMethod('stopProtection', {'pin': pin});
-      } on PlatformException {
-        _message('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
+        if (enabled) {
+          if (!await _ensurePin()) return;
+          await _channel.invokeMethod('startProtection', {
+            'minutes': _status?.dailyMinutes ?? 60,
+          });
+          await _refreshStatus();
+          _showMessage('تم تفعيل الحماية والعداد يعمل الآن.');
+
+          if (_status?.overlayAllowed != true) {
+            await _channel.invokeMethod('openOverlaySettings');
+            _showMessage('اسمح بالظهور فوق التطبيقات حتى تعمل شاشة القفل.');
+          }
+        } else {
+          final pin = await _askPin(title: 'إيقاف الحماية');
+          if (pin == null) return;
+          await _channel.invokeMethod('stopProtection', {'pin': pin});
+          await _refreshStatus();
+          _showMessage('تم إيقاف الحماية.');
+        }
+      } on PlatformException catch (error) {
+        await _refreshStatus(silent: true);
+        _showMessage(error.message ?? 'تعذر تغيير حالة الحماية.');
       }
-    }
-    await _loadStatus();
+    });
   }
 
   Future<void> _changeDuration(int minutes) async {
-    if (_savingDuration || minutes == _dailyMinutes) return;
-    if (!await _ensurePin()) return;
+    if (minutes == _status?.dailyMinutes) return;
+    await _runBusy(() async {
+      if (!await _ensurePin()) return;
+      final pin = await _askPin(title: 'تأكيد اختيار ${_durationLabel(minutes)}');
+      if (pin == null) return;
 
-    final pin = await _askPin(title: 'تأكيد اختيار ${_durationLabel(minutes)}');
-    if (pin == null) return;
+      try {
+        final valid = await _channel.invokeMethod<bool>('verifyPin', {'pin': pin}) ?? false;
+        if (!valid) {
+          _showMessage('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
+          return;
+        }
 
-    setState(() => _savingDuration = true);
-    try {
-      final valid = await _channel.invokeMethod<bool>('verifyPin', {'pin': pin}) ?? false;
-      if (!valid) {
-        _message('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
-        return;
+        final wasEnabled = _status?.enabled == true;
+        await _channel.invokeMethod('startProtection', {'minutes': minutes});
+        if (!wasEnabled) {
+          await _channel.invokeMethod('stopProtection', {'pin': pin});
+        }
+        await _refreshStatus();
+        _showMessage('تم اعتماد ${_durationLabel(minutes)} يوميًا.');
+      } on PlatformException catch (error) {
+        _showMessage(error.message ?? 'تعذر حفظ المدة.');
       }
-
-      final wasEnabled = _enabled;
-      await _channel.invokeMethod('startProtection', {'minutes': minutes});
-      if (!wasEnabled) {
-        await _channel.invokeMethod('stopProtection', {'pin': pin});
-      }
-
-      await _loadStatus();
-      _message('تم اعتماد ${_durationLabel(minutes)} يوميًا.');
-    } on PlatformException catch (error) {
-      _message(error.message ?? 'تعذر حفظ المدة.');
-    } finally {
-      if (mounted) setState(() => _savingDuration = false);
-    }
+    });
   }
 
   Future<void> _addTime(int minutes) async {
-    final pin = await _askPin(title: 'إضافة $minutes دقيقة');
-    if (pin == null) return;
-    try {
-      await _channel.invokeMethod('addTime', {'pin': pin, 'minutes': minutes});
-      _message('تمت إضافة $minutes دقيقة.');
-    } on PlatformException {
-      _message('رمز ولي الأمر غير صحيح، وتم تسجيل المحاولة.');
-    }
-    await _loadStatus();
+    await _runBusy(() async {
+      final pin = await _askPin(title: 'إضافة $minutes دقيقة');
+      if (pin == null) return;
+      try {
+        await _channel.invokeMethod('addTime', {'pin': pin, 'minutes': minutes});
+        await _refreshStatus();
+        _showMessage('تمت إضافة $minutes دقيقة.');
+      } on PlatformException catch (error) {
+        _showMessage(error.message ?? 'رمز ولي الأمر غير صحيح.');
+      }
+    });
   }
 
   Future<void> _editParentEmail() async {
     if (!await _ensurePin()) return;
     final pin = await _askPin(title: 'تأكيد تغيير البريد');
     if (pin == null) return;
+
     final valid = await _channel.invokeMethod<bool>('verifyPin', {'pin': pin}) ?? false;
     if (!valid) {
-      _message('رمز ولي الأمر غير صحيح.');
+      _showMessage('رمز ولي الأمر غير صحيح.');
       return;
     }
 
-    final controller = TextEditingController(text: _parentEmail);
+    final controller = TextEditingController(text: _status?.parentEmail ?? '');
     final email = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('بريد ولي الأمر'),
         content: TextField(
           controller: controller,
@@ -266,21 +322,26 @@ class _HomeScreenState extends State<HomeScreen> {
           decoration: const InputDecoration(labelText: 'البريد الإلكتروني'),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('إلغاء'),
+          ),
           FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            onPressed: () => Navigator.pop(dialogContext, controller.text.trim()),
             child: const Text('حفظ'),
           ),
         ],
       ),
     );
+    controller.dispose();
     if (email == null || email.isEmpty) return;
+
     try {
       await _channel.invokeMethod('setParentEmail', {'email': email});
-      await _loadStatus();
-      _message('تم حفظ البريد.');
+      await _refreshStatus();
+      _showMessage('تم حفظ البريد.');
     } on PlatformException catch (error) {
-      _message(error.message ?? 'تعذر حفظ البريد.');
+      _showMessage(error.message ?? 'تعذر حفظ البريد.');
     }
   }
 
@@ -288,9 +349,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final raw = await _channel.invokeListMethod<dynamic>('getFailedAttempts') ?? const [];
     if (!mounted) return;
     final attempts = raw.whereType<Map>().toList();
+
     await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: const Text('المحاولات الفاشلة'),
         content: SizedBox(
           width: double.maxFinite,
@@ -314,20 +376,24 @@ class _HomeScreenState extends State<HomeScreen> {
           if (attempts.isNotEmpty)
             TextButton.icon(
               onPressed: () {
-                Navigator.pop(context);
+                Navigator.pop(dialogContext);
                 _channel.invokeMethod('sendSecurityReport');
               },
               icon: const Icon(Icons.email_outlined),
               label: const Text('إرسال التقرير'),
             ),
-          FilledButton(onPressed: () => Navigator.pop(context), child: const Text('إغلاق')),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('إغلاق'),
+          ),
         ],
       ),
     );
   }
 
-  int get _limitSeconds => _dailyMinutes * 60;
-  int get _remainingSeconds => (_limitSeconds - _usedSeconds).clamp(0, _limitSeconds);
+  int get _limitSeconds => (_status?.dailyMinutes ?? 60) * 60;
+  int get _remainingSeconds =>
+      (_limitSeconds - (_status?.usedSeconds ?? 0)).clamp(0, _limitSeconds);
 
   String _format(int seconds) {
     final hours = seconds ~/ 3600;
@@ -359,8 +425,29 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final status = _status;
+    if (status == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('حارس وقت الأطفال')),
+        body: Center(
+          child: _error == null
+              ? const CircularProgressIndicator()
+              : Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(_error!, textAlign: TextAlign.center),
+                      const SizedBox(height: 12),
+                      FilledButton(
+                        onPressed: _refreshStatus,
+                        child: const Text('إعادة المحاولة'),
+                      ),
+                    ],
+                  ),
+                ),
+        ),
+      );
     }
 
     final scheme = Theme.of(context).colorScheme;
@@ -372,23 +459,34 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('حارس وقت الأطفال'),
         centerTitle: true,
+        actions: [
+          IconButton(
+            tooltip: 'تحديث الحالة',
+            onPressed: _busy ? null : _refreshStatus,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
       ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(18),
           children: [
+            if (_busy) const LinearProgressIndicator(),
+            if (_busy) const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: _enabled ? scheme.primaryContainer : scheme.surfaceContainerHighest,
+                color: status.enabled
+                    ? scheme.primaryContainer
+                    : scheme.surfaceContainerHighest,
                 borderRadius: BorderRadius.circular(24),
               ),
               child: Row(
                 children: [
                   Icon(
-                    _enabled ? Icons.shield : Icons.shield_outlined,
+                    status.enabled ? Icons.shield : Icons.shield_outlined,
                     size: 42,
-                    color: _enabled ? scheme.primary : scheme.outline,
+                    color: status.enabled ? scheme.primary : scheme.outline,
                   ),
                   const SizedBox(width: 16),
                   Expanded(
@@ -396,19 +494,24 @@ class _HomeScreenState extends State<HomeScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _enabled ? 'الحماية مفعّلة' : 'الحماية متوقفة',
+                          status.enabled ? 'الحماية مفعّلة' : 'الحماية متوقفة',
                           style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          _enabled
-                              ? 'العداد يعمل تلقائيًا أثناء استخدام الهاتف.'
+                          status.enabled
+                              ? status.overlayAllowed
+                                  ? 'العداد وشاشة القفل جاهزان.'
+                                  : 'العداد يعمل، لكن صلاحية شاشة القفل ناقصة.'
                               : 'اختر المدة ثم فعّل الحماية.',
                         ),
                       ],
                     ),
                   ),
-                  Switch(value: _enabled, onChanged: _setProtection),
+                  Switch(
+                    value: status.enabled,
+                    onChanged: _busy ? null : _setProtection,
+                  ),
                 ],
               ),
             ),
@@ -418,7 +521,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 padding: const EdgeInsets.all(22),
                 child: Column(
                   children: [
-                    Text('المدة المعتمدة: ${_durationLabel(_dailyMinutes)}'),
+                    Text('المدة المعتمدة: ${_durationLabel(status.dailyMinutes)}'),
                     const SizedBox(height: 10),
                     Text(
                       _format(_remainingSeconds),
@@ -436,7 +539,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       borderRadius: BorderRadius.circular(10),
                     ),
                     const SizedBox(height: 12),
-                    Text('المستخدم اليوم: ${_format(_usedSeconds)}'),
+                    Text('المستخدم اليوم: ${_format(status.usedSeconds)}'),
                   ],
                 ),
               ),
@@ -451,27 +554,22 @@ class _HomeScreenState extends State<HomeScreen> {
               spacing: 10,
               runSpacing: 10,
               children: _durationOptions.map((minutes) {
-                final selected = _dailyMinutes == minutes;
                 return ChoiceChip(
                   label: Text(_durationLabel(minutes)),
-                  selected: selected,
-                  onSelected: _savingDuration ? null : (_) => _changeDuration(minutes),
+                  selected: status.dailyMinutes == minutes,
+                  onSelected: _busy ? null : (_) => _changeDuration(minutes),
                 );
               }).toList(),
             ),
-            if (_savingDuration) ...[
-              const SizedBox(height: 10),
-              const LinearProgressIndicator(),
-            ],
             const SizedBox(height: 18),
             Card(
               child: ListTile(
-                leading: Icon(_hasPin ? Icons.lock : Icons.lock_open),
-                title: Text(_hasPin ? 'رمز ولي الأمر محفوظ' : 'أنشئ رمز ولي الأمر'),
+                leading: Icon(status.hasPin ? Icons.lock : Icons.lock_open),
+                title: Text(status.hasPin ? 'رمز ولي الأمر محفوظ' : 'أنشئ رمز ولي الأمر'),
                 subtitle: const Text('مطلوب لتغيير المدة أو إيقاف الحماية.'),
                 trailing: FilledButton.tonal(
-                  onPressed: _ensurePin,
-                  child: Text(_hasPin ? 'محفوظ' : 'إنشاء'),
+                  onPressed: _busy ? null : _ensurePin,
+                  child: Text(status.hasPin ? 'محفوظ' : 'إنشاء'),
                 ),
               ),
             ),
@@ -481,26 +579,26 @@ class _HomeScreenState extends State<HomeScreen> {
                 leading: const Icon(Icons.alternate_email),
                 title: const Text('بريد ولي الأمر'),
                 subtitle: Text(
-                  _parentEmail.isEmpty ? 'لم يتم تحديد بريد.' : _parentEmail,
+                  status.parentEmail.isEmpty ? 'لم يتم تحديد بريد.' : status.parentEmail,
                   textDirection: TextDirection.ltr,
                 ),
-                onTap: _editParentEmail,
+                onTap: _busy ? null : _editParentEmail,
               ),
             ),
             const SizedBox(height: 10),
             Card(
               child: ListTile(
                 leading: Badge(
-                  isLabelVisible: _failedAttempts > 0,
-                  label: Text('$_failedAttempts'),
+                  isLabelVisible: status.failedAttempts > 0,
+                  label: Text('${status.failedAttempts}'),
                   child: const Icon(Icons.gpp_maybe_outlined),
                 ),
                 title: const Text('المحاولات الفاشلة'),
-                subtitle: Text('عدد المحاولات: $_failedAttempts'),
+                subtitle: Text('عدد المحاولات: ${status.failedAttempts}'),
                 onTap: _showFailedAttempts,
               ),
             ),
-            if (_enabled) ...[
+            if (status.enabled) ...[
               const SizedBox(height: 18),
               Card(
                 child: Padding(
@@ -516,7 +614,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [10, 15, 30, 60]
                             .map(
                               (minutes) => OutlinedButton(
-                                onPressed: () => _addTime(minutes),
+                                onPressed: _busy ? null : () => _addTime(minutes),
                                 child: Text('+$minutes دقيقة'),
                               ),
                             )
@@ -531,16 +629,20 @@ class _HomeScreenState extends State<HomeScreen> {
             Card(
               child: ListTile(
                 leading: Icon(
-                  _overlayAllowed ? Icons.check_circle : Icons.warning_amber_rounded,
-                  color: _overlayAllowed ? Colors.green : Colors.orange,
+                  status.overlayAllowed ? Icons.check_circle : Icons.warning_amber_rounded,
+                  color: status.overlayAllowed ? Colors.green : Colors.orange,
                 ),
                 title: Text(
-                  _overlayAllowed
+                  status.overlayAllowed
                       ? 'صلاحية شاشة القفل مفعّلة'
                       : 'صلاحية شاشة القفل مطلوبة',
                 ),
-                subtitle: const Text('ضرورية لإظهار القفل عند انتهاء الوقت.'),
-                trailing: _overlayAllowed
+                subtitle: Text(
+                  status.overlayAllowed
+                      ? 'يمكن عرض شاشة القفل عند انتهاء الوقت.'
+                      : 'العداد قد يعمل، لكن القفل لن يظهر قبل منح الصلاحية.',
+                ),
+                trailing: status.overlayAllowed
                     ? null
                     : FilledButton.tonal(
                         onPressed: () => _channel.invokeMethod('openOverlaySettings'),
