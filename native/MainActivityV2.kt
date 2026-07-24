@@ -1,5 +1,6 @@
 package com.explapp.kidstimeguard
 
+import android.Manifest
 import android.app.*
 import android.app.admin.DeviceAdminReceiver
 import android.app.admin.DevicePolicyManager
@@ -68,6 +69,14 @@ private fun verifyPin(prefs: SharedPreferences, candidate: String): Boolean {
 private fun Context.startMonitorServiceSafely() {
     val intent = Intent(this, MonitorService::class.java)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+}
+
+private fun Activity.requestNotificationPermissionIfNeeded() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+    ) {
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7001)
+    }
 }
 
 private fun shouldRecoverProtectionService(prefs: SharedPreferences): Boolean {
@@ -215,6 +224,7 @@ class MainActivity : FlutterActivity() {
                         .remove("unlocked_date")
                         .remove(LAST_TICK_KEY)
                         .commit()
+                    requestNotificationPermissionIfNeeded()
                     startMonitorServiceSafely()
                     result.success(true)
                 }
