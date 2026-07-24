@@ -31,11 +31,14 @@ jobs:
       - name: Create Android project
         run: flutter create --platforms=android --org com.explapp --no-pub .
 
-      - name: Remove default test
-        run: rm -rf test
+      - name: Remove generated default test only
+        run: rm -f test/widget_test.dart
 
       - name: Install native monitoring files
         run: |
+          test -f native/MainActivityV2.kt
+          test -f native/AndroidManifest.xml
+          test -f test/guard_status_test.dart
           mkdir -p android/app/src/main/kotlin/com/explapp/kidstimeguard
           cp native/MainActivityV2.kt android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
           cp native/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
@@ -49,8 +52,14 @@ jobs:
       - name: Install packages
         run: flutter pub get
 
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+
       - name: Analyze
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Test
+        run: flutter test
 
       - name: Build release APK
         run: flutter build apk --release
