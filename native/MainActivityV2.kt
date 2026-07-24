@@ -70,6 +70,15 @@ private fun Context.startMonitorServiceSafely() {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
 }
 
+private fun shouldRecoverProtectionService(prefs: SharedPreferences): Boolean {
+    if (!prefs.getBoolean("enabled", false)) return false
+    val heartbeat = prefs.getLong(HEARTBEAT_KEY, 0L)
+    if (heartbeat <= 0L) return true
+    val now = System.currentTimeMillis()
+    val age = now - heartbeat
+    return age > 30_000L || age < -5_000L
+}
+
 private fun Context.scheduleMonitorWatchdog(delayMs: Long = WATCHDOG_INTERVAL_MS) {
     val pending = PendingIntent.getBroadcast(
         this,
@@ -242,16 +251,19 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "getFailedAttempts" -> result.success(readFailedAttempts(prefs))
-                "getStatus" -> result.success(mapOf(
-                    "enabled" to prefs.getBoolean("enabled", false),
-                    "usedSeconds" to prefs.getInt("used_seconds", 0),
-                    "dailyMinutes" to prefs.getInt("daily_minutes", 60),
-                    "hasPin" to hasStoredPin(prefs),
-                    "failedAttempts" to readFailedAttempts(prefs).size,
-                    "parentEmail" to prefs.getString(PARENT_EMAIL_KEY, "").orEmpty(),
-                    "overlayAllowed" to Settings.canDrawOverlays(this),
-                    "serviceHeartbeatMs" to prefs.getLong(HEARTBEAT_KEY, 0L)
-                ))
+                "getStatus" -> {
+                    if (shouldRecoverProtectionService(prefs)) startMonitorServiceSafely()
+                    result.success(mapOf(
+                        "enabled" to prefs.getBoolean("enabled", false),
+                        "usedSeconds" to prefs.getInt("used_seconds", 0),
+                        "dailyMinutes" to prefs.getInt("daily_minutes", 60),
+                        "hasPin" to hasStoredPin(prefs),
+                        "failedAttempts" to readFailedAttempts(prefs).size,
+                        "parentEmail" to prefs.getString(PARENT_EMAIL_KEY, "").orEmpty(),
+                        "overlayAllowed" to Settings.canDrawOverlays(this),
+                        "serviceHeartbeatMs" to prefs.getLong(HEARTBEAT_KEY, 0L)
+                    ))
+                }
                 "openOverlaySettings" -> {
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
                     result.success(true)
