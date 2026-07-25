@@ -9,6 +9,7 @@ on:
     paths-ignore:
       - 'apk/**'
       - 'DOWNLOAD_APK.md'
+      - 'BUILD_FAILURE.log'
 
 concurrency:
   group: kidsmonnter-apk-${{ github.workflow }}-${{ github.ref }}
@@ -25,6 +26,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Validate Python merge tools
         run: python3 -m py_compile tools/*.py
@@ -114,7 +117,27 @@ jobs:
         run: flutter test
 
       - name: Build release APK
-        run: flutter build apk --release
+        shell: bash
+        run: |
+          set +e
+          flutter build apk --release > build-apk.log 2>&1
+          status=$?
+          cat build-apk.log
+          if [ "$status" -ne 0 ]; then
+            tail -n 220 build-apk.log > BUILD_FAILURE.log
+          else
+            rm -f BUILD_FAILURE.log
+          fi
+          exit "$status"
+
+      - name: Publish build diagnostics on PR failure
+        if: failure() && github.event_name == 'pull_request' && hashFiles('BUILD_FAILURE.log') != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add BUILD_FAILURE.log
+          git diff --cached --quiet || git commit -m "حفظ تشخيص فشل APK [skip ci]"
+          git push origin HEAD:${{ github.head_ref }}
 
       - name: Prepare APK artifact
         run: |
