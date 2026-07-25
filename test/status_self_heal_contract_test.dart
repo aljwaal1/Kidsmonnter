@@ -11,12 +11,16 @@ void main() {
     expect(
       source,
       contains(
-        'if (shouldRecoverProtectionService(prefs)) startMonitorServiceSafely()',
+        'if (shouldRecoverProtectionService(prefs)) requestMonitorServiceStartIfAllowed(prefs)',
       ),
     );
     expect(
       source,
       isNot(contains('if (shouldRecoverProtectionService(prefs)) startProtection')),
+    );
+    expect(
+      source,
+      isNot(contains('if (shouldRecoverProtectionService(prefs)) startMonitorServiceSafely()')),
     );
   });
 }
