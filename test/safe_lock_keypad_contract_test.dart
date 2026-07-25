@@ -19,6 +19,12 @@ void main() {
     expect(lockSource, contains('ScrollView(this)'));
     expect(lockSource, contains('.commit()'));
     expect(lockSource, contains('FLAG_SHOW_WHEN_LOCKED'));
+    expect(lockSource, contains('isScreenInteractive()'));
+    expect(lockSource, contains('PowerManager).isInteractive'));
+    expect(
+      lockSource,
+      contains('shouldRemainLocked() && isScreenInteractive()'),
+    );
     expect(lockSource, isNot(contains('EditText(this)')));
     expect(lockSource, isNot(contains('FLAG_KEEP_SCREEN_ON')));
     expect(lockSource, isNot(contains('FLAG_TURN_SCREEN_ON')));
