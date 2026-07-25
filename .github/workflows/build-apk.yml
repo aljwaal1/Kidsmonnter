@@ -9,7 +9,6 @@ on:
     paths-ignore:
       - 'apk/**'
       - 'DOWNLOAD_APK.md'
-      - 'BUILD_FAILURE.log'
 
 concurrency:
   group: kidsmonnter-apk-${{ github.workflow }}-${{ github.ref }}
@@ -130,14 +129,14 @@ jobs:
           fi
           exit "$status"
 
-      - name: Publish build diagnostics on PR failure
-        if: failure() && github.event_name == 'pull_request' && hashFiles('BUILD_FAILURE.log') != ''
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add BUILD_FAILURE.log
-          git diff --cached --quiet || git commit -m "حفظ تشخيص فشل APK [skip ci]"
-          git push origin HEAD:${{ github.head_ref }}
+      - name: Upload build diagnostics
+        if: failure() && hashFiles('BUILD_FAILURE.log') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: KidsMonnter-build-failure-${{ github.sha }}
+          path: BUILD_FAILURE.log
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Prepare APK artifact
         run: |
