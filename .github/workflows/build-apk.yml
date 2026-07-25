@@ -8,6 +8,10 @@ on:
       - 'apk/**'
       - 'DOWNLOAD_APK.md'
 
+concurrency:
+  group: kidsmonnter-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
