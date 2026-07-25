@@ -19,7 +19,16 @@ void main() {
     test('checks heartbeat freshness before restarting the service', () {
       expect(nativeSource, contains('STALE_HEARTBEAT_MS'));
       expect(nativeSource, contains('heartbeatAge > STALE_HEARTBEAT_MS'));
-      expect(nativeSource, contains('context.startMonitorServiceSafely()'));
+      expect(
+        nativeSource,
+        contains(
+          'context.requestMonitorServiceStartIfAllowed(prefs, force = !isWatchdog)',
+        ),
+      );
+      expect(
+        nativeSource,
+        isNot(contains('if (serviceNeedsRestart) context.startMonitorServiceSafely()')),
+      );
     });
 
     test('reschedules the watchdog after every receiver execution', () {
