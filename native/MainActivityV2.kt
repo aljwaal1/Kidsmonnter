@@ -79,6 +79,16 @@ private fun Activity.requestNotificationPermissionIfNeeded() {
     }
 }
 
+private fun Context.guardNotificationContentIntent(): PendingIntent =
+    PendingIntent.getActivity(
+        this,
+        1003,
+        Intent(this, MainActivity::class.java).addFlags(
+            Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        ),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
 private fun shouldRecoverProtectionService(prefs: SharedPreferences): Boolean {
     if (!prefs.getBoolean("enabled", false)) return false
     val heartbeat = prefs.getLong(HEARTBEAT_KEY, 0L)
@@ -463,6 +473,7 @@ class MonitorService : Service() {
     private fun buildGuardNotification(text: String): Notification =
         NotificationCompat.Builder(this, GUARD_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
+            .setContentIntent(guardNotificationContentIntent())
             .setContentTitle("حارس وقت الأطفال")
             .setContentText(text)
             .setOngoing(true)
