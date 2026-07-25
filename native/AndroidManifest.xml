@@ -40,7 +40,6 @@
             android:resizeableActivity="false"
             android:screenOrientation="portrait"
             android:showWhenLocked="true"
-            android:turnScreenOn="true"
             android:theme="@style/LaunchTheme" />
 
         <activity
