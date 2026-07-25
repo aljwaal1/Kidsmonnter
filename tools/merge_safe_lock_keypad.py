@@ -18,10 +18,7 @@ replacement = r'''class LockActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         configureDeviceOwnerPolicies()
-        window.addFlags(
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED
-        )
+        window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         if (!shouldRemainLocked()) { finish(); return }
         showImmersive()
         val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
