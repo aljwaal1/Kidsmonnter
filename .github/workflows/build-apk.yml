@@ -54,6 +54,23 @@ jobs:
       - name: Merge emergency protection stop into lock screen
         run: python3 tools/merge_lock_emergency_stop.py
 
+      - name: Verify merge tools are idempotent
+        run: |
+          cp native/MainActivityV2.kt /tmp/MainActivityV2.after-first-merge.kt
+          cp lib/main.dart /tmp/main.after-first-merge.dart
+          python3 tools/merge_preflight_hardening.py
+          python3 tools/merge_service_watchdog.py
+          python3 tools/merge_service_restart_channel.py
+          python3 tools/merge_status_self_heal.py
+          python3 tools/merge_service_restart_cooldown.py
+          python3 tools/merge_notification_permission.py
+          python3 tools/merge_guard_notification_navigation.py
+          python3 tools/merge_lock_launch_cooldown.py
+          python3 tools/merge_safe_lock_keypad.py
+          python3 tools/merge_lock_emergency_stop.py
+          cmp --silent /tmp/MainActivityV2.after-first-merge.kt native/MainActivityV2.kt
+          cmp --silent /tmp/main.after-first-merge.dart lib/main.dart
+
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
