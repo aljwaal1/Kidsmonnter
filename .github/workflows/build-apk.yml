@@ -116,27 +116,7 @@ jobs:
         run: flutter test
 
       - name: Build release APK
-        shell: bash
-        run: |
-          set +e
-          flutter build apk --release > build-apk.log 2>&1
-          status=$?
-          cat build-apk.log
-          if [ "$status" -ne 0 ]; then
-            tail -n 220 build-apk.log > BUILD_FAILURE.log
-          else
-            rm -f BUILD_FAILURE.log
-          fi
-          exit "$status"
-
-      - name: Upload build diagnostics
-        if: failure() && hashFiles('BUILD_FAILURE.log') != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: KidsMonnter-build-failure-${{ github.sha }}
-          path: BUILD_FAILURE.log
-          if-no-files-found: error
-          retention-days: 3
+        run: flutter build apk --release
 
       - name: Prepare APK artifact
         run: |
