@@ -17,6 +17,8 @@ void main() {
     expect(lockSource, contains('unlockWithPin(addTime = true)'));
     expect(lockSource, contains('unlockWithPin(addTime = false)'));
     expect(lockSource, contains('ScrollView(this)'));
+    expect(lockSource, contains('FrameLayout.LayoutParams(-1, -2)'));
+    expect(lockSource, isNot(contains('ScrollView.LayoutParams')));
     expect(lockSource, contains('.commit()'));
     expect(lockSource, contains('FLAG_SHOW_WHEN_LOCKED'));
     expect(lockSource, contains('isScreenInteractive()'));
