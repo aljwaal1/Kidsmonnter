@@ -5,6 +5,13 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   test('BootReceiver remains private while retaining system restart actions', () {
     final manifest = File('native/AndroidManifest.xml').readAsStringSync();
+
+    expect(
+      manifest,
+      contains('android.permission.RECEIVE_BOOT_COMPLETED'),
+      reason: 'استعادة الحماية بعد إعادة التشغيل تتطلب صلاحية الإقلاع.',
+    );
+
     final receiverMatch = RegExp(
       r'<receiver\s+[^>]*android:name="\.BootReceiver"[\s\S]*?</receiver>',
     ).firstMatch(manifest);
@@ -20,6 +27,10 @@ void main() {
     expect(
       receiver,
       contains('android.intent.action.LOCKED_BOOT_COMPLETED'),
+    );
+    expect(
+      receiver,
+      contains('android.intent.action.USER_UNLOCKED'),
     );
     expect(
       receiver,
