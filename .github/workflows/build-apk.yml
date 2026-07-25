@@ -84,6 +84,7 @@ jobs:
           test -f test/guard_notification_navigation_contract_test.dart
           test -f test/lock_launch_cooldown_contract_test.dart
           test -f test/safe_lock_keypad_contract_test.dart
+          test -f test/lock_emergency_stop_contract_test.dart
           grep -q 'uninstallBlocked' lib/main.dart
           grep -q 'isUninstallBlocked' native/MainActivityV2.kt
           grep -q 'PendingIntent.getBroadcast' native/MainActivityV2.kt
