@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('lock screen uses an internal keypad and does not keep or wake the display', () {
+  test('lock screen uses an internal keypad and cleans pending callbacks', () {
     final source = File('native/MainActivityV2.kt').readAsStringSync();
     final lockStart = source.indexOf('class LockActivity : Activity()');
     final lockEnd = source.indexOf('class KidsMonnterDeviceAdminReceiver');
@@ -25,6 +25,8 @@ void main() {
       lockSource,
       contains('shouldRemainLocked() && isScreenInteractive()'),
     );
+    expect(lockSource, contains('override fun onDestroy()'));
+    expect(lockSource, contains('handler.removeCallbacksAndMessages(null)'));
     expect(lockSource, isNot(contains('EditText(this)')));
     expect(lockSource, isNot(contains('FLAG_KEEP_SCREEN_ON')));
     expect(lockSource, isNot(contains('FLAG_TURN_SCREEN_ON')));
