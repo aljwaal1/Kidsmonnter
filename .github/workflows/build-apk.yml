@@ -1,7 +1,9 @@
-name: Build APK Direct
+name: Build and Verify KidsMonnter APK
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
     paths-ignore:
@@ -9,7 +11,7 @@ on:
       - 'DOWNLOAD_APK.md'
 
 concurrency:
-  group: kidsmonnter-apk-${{ github.ref }}
+  group: kidsmonnter-apk-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -18,46 +20,19 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Merge preflight hardening into sources
-        run: python3 tools/merge_preflight_hardening.py
+      - name: Validate Python merge tools
+        run: python3 -m py_compile tools/*.py
 
-      - name: Merge service watchdog into native source
-        run: python3 tools/merge_service_watchdog.py
-
-      - name: Merge dedicated service restart channel
-        run: python3 tools/merge_service_restart_channel.py
-
-      - name: Merge status self-heal into native source
-        run: python3 tools/merge_status_self_heal.py
-
-      - name: Merge service restart cooldown
-        run: python3 tools/merge_service_restart_cooldown.py
-
-      - name: Merge notification permission request
-        run: python3 tools/merge_notification_permission.py
-
-      - name: Merge guard notification navigation
-        run: python3 tools/merge_guard_notification_navigation.py
-
-      - name: Merge lock launch cooldown
-        run: python3 tools/merge_lock_launch_cooldown.py
-
-      - name: Replace lock screen with safe internal keypad
-        run: python3 tools/merge_safe_lock_keypad.py
-
-      - name: Merge emergency protection stop into lock screen
-        run: python3 tools/merge_lock_emergency_stop.py
-
-      - name: Verify merge tools are idempotent
+      - name: Merge protection hardening into build sources
         run: |
-          cp native/MainActivityV2.kt /tmp/MainActivityV2.after-first-merge.kt
-          cp lib/main.dart /tmp/main.after-first-merge.dart
           python3 tools/merge_preflight_hardening.py
           python3 tools/merge_service_watchdog.py
           python3 tools/merge_service_restart_channel.py
@@ -68,8 +43,37 @@ jobs:
           python3 tools/merge_lock_launch_cooldown.py
           python3 tools/merge_safe_lock_keypad.py
           python3 tools/merge_lock_emergency_stop.py
-          cmp --silent /tmp/MainActivityV2.after-first-merge.kt native/MainActivityV2.kt
-          cmp --silent /tmp/main.after-first-merge.dart lib/main.dart
+          python3 tools/merge_safe_policy_release.py
+
+      - name: Verify critical protection contracts
+        run: |
+          test -f native/MainActivityV2.kt
+          test -f native/AndroidManifest.xml
+          test -f test/guard_status_test.dart
+          test -f test/service_watchdog_contract_test.dart
+          test -f test/status_self_heal_contract_test.dart
+          test -f test/service_restart_cooldown_contract_test.dart
+          test -f test/notification_permission_contract_test.dart
+          test -f test/guard_notification_navigation_contract_test.dart
+          test -f test/lock_launch_cooldown_contract_test.dart
+          test -f test/safe_lock_keypad_contract_test.dart
+          test -f test/lock_emergency_stop_contract_test.dart
+          test -f test/safe_policy_release_contract_test.dart
+          grep -q 'uninstallBlocked' lib/main.dart
+          grep -q 'PendingIntent.getBroadcast' native/MainActivityV2.kt
+          grep -q 'MONITOR_WATCHDOG_ACTION' native/MainActivityV2.kt
+          grep -q 'requestNotificationPermissionIfNeeded' native/MainActivityV2.kt
+          grep -q 'guardNotificationContentIntent' native/MainActivityV2.kt
+          grep -q 'LOCK_LAUNCH_COOLDOWN_MS' native/MainActivityV2.kt
+          grep -q 'GridLayout(this)' native/MainActivityV2.kt
+          grep -q 'unlockWithPin(addTime = true)' native/MainActivityV2.kt
+          grep -q 'unlockWithPin(addTime = false)' native/MainActivityV2.kt
+          grep -q 'disableProtectionWithPin()' native/MainActivityV2.kt
+          grep -q 'releaseDeviceOwnerPolicies()' native/MainActivityV2.kt
+          grep -q 'text = "إيقاف الحماية"' native/MainActivityV2.kt
+          ! sed -n '/class LockActivity/,/class KidsMonnterDeviceAdminReceiver/p' native/MainActivityV2.kt | grep -q 'EditText(this)'
+          ! sed -n '/class LockActivity/,/class KidsMonnterDeviceAdminReceiver/p' native/MainActivityV2.kt | grep -q 'FLAG_TURN_SCREEN_ON'
+          ! grep -q 'PendingIntent.getService' native/MainActivityV2.kt
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -83,47 +87,12 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Create Android project
+      - name: Generate Android project files
         run: flutter create --platforms=android --org com.explapp --no-pub .
 
-      - name: Remove generated default test only
-        run: rm -f test/widget_test.dart
-
-      - name: Install native monitoring files
+      - name: Install native monitoring implementation
         run: |
-          test -f native/MainActivityV2.kt
-          test -f native/AndroidManifest.xml
-          test -f test/guard_status_test.dart
-          test -f test/service_watchdog_contract_test.dart
-          test -f test/status_self_heal_contract_test.dart
-          test -f test/service_restart_cooldown_contract_test.dart
-          test -f test/notification_permission_contract_test.dart
-          test -f test/guard_notification_navigation_contract_test.dart
-          test -f test/lock_launch_cooldown_contract_test.dart
-          test -f test/safe_lock_keypad_contract_test.dart
-          test -f test/lock_emergency_stop_contract_test.dart
-          grep -q 'uninstallBlocked' lib/main.dart
-          grep -q 'isUninstallBlocked' native/MainActivityV2.kt
-          grep -q 'PendingIntent.getBroadcast' native/MainActivityV2.kt
-          grep -q 'MONITOR_WATCHDOG_ACTION' native/MainActivityV2.kt
-          grep -q '"restartProtectionService"' native/MainActivityV2.kt
-          grep -q 'shouldRecoverProtectionService' native/MainActivityV2.kt
-          grep -q 'requestMonitorServiceStartIfAllowed' native/MainActivityV2.kt
-          grep -q 'SERVICE_START_REQUEST_COOLDOWN_MS' native/MainActivityV2.kt
-          grep -q 'requestNotificationPermissionIfNeeded' native/MainActivityV2.kt
-          grep -q 'Manifest.permission.POST_NOTIFICATIONS' native/MainActivityV2.kt
-          grep -q 'guardNotificationContentIntent' native/MainActivityV2.kt
-          grep -q 'setContentIntent' native/MainActivityV2.kt
-          grep -q 'LOCK_LAUNCH_COOLDOWN_MS' native/MainActivityV2.kt
-          grep -q 'lastLockLaunchElapsedMs' native/MainActivityV2.kt
-          grep -q 'GridLayout(this)' native/MainActivityV2.kt
-          grep -q 'unlockWithPin(addTime = true)' native/MainActivityV2.kt
-          grep -q 'unlockWithPin(addTime = false)' native/MainActivityV2.kt
-          grep -q 'disableProtectionWithPin()' native/MainActivityV2.kt
-          grep -q 'text = "إيقاف الحماية"' native/MainActivityV2.kt
-          ! sed -n '/class LockActivity/,/class KidsMonnterDeviceAdminReceiver/p' native/MainActivityV2.kt | grep -q 'EditText(this)'
-          ! sed -n '/class LockActivity/,/class KidsMonnterDeviceAdminReceiver/p' native/MainActivityV2.kt | grep -q 'FLAG_TURN_SCREEN_ON'
-          ! grep -q 'PendingIntent.getService' native/MainActivityV2.kt
+          rm -f test/widget_test.dart
           mkdir -p android/app/src/main/kotlin/com/explapp/kidstimeguard
           cp native/MainActivityV2.kt android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
           cp native/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
@@ -131,42 +100,65 @@ jobs:
           cp native/res/xml/device_admin_receiver.xml android/app/src/main/res/xml/device_admin_receiver.xml
           cp native/res/values/device_admin_strings.xml android/app/src/main/res/values/device_admin_strings.xml
           rm -rf android/app/src/main/kotlin/com/explapp/kidsmonnter
-          sed -i 's/com.explapp.kidsmonnter/com.explapp.kidstimeguard/g' android/app/build.gradle.kts || true
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts || true
+          sed -i 's/com.explapp.kidsmonnter/com.explapp.kidstimeguard/g' android/app/build.gradle.kts
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts
 
-      - name: Install packages
+      - name: Install Flutter packages
         run: flutter pub get
 
-      - name: Normalize Dart formatting in build workspace
+      - name: Format Dart sources in build workspace
         run: dart format lib test
 
-      - name: Analyze
+      - name: Analyze application
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
-      - name: Test
+      - name: Run tests
         run: flutter test
 
       - name: Build release APK
-        run: flutter build apk --release
-
-      - name: Copy APK
+        shell: bash
         run: |
-          mkdir -p apk
-          cp build/app/outputs/flutter-apk/app-release.apk apk/KidsMonnter.apk
-          printf '# تحميل التطبيق\n\n[تحميل KidsMonnter APK](./apk/KidsMonnter.apk)\n' > DOWNLOAD_APK.md
+          set +e
+          flutter build apk --release > build-apk.log 2>&1
+          status=$?
+          cat build-apk.log
+          if [ "$status" -ne 0 ]; then
+            tail -n 220 build-apk.log > BUILD_FAILURE.log
+          else
+            rm -f BUILD_FAILURE.log
+          fi
+          exit "$status"
 
-      - name: Upload APK artifact
+      - name: Upload build diagnostics
+        if: failure() && hashFiles('BUILD_FAILURE.log') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: KidsMonnter-build-failure-${{ github.sha }}
+          path: BUILD_FAILURE.log
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Prepare APK artifact
+        run: |
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk dist/KidsMonnter.apk
+
+      - name: Upload verified APK
         uses: actions/upload-artifact@v4
         with:
           name: KidsMonnter-${{ github.sha }}
-          path: apk/KidsMonnter.apk
+          path: dist/KidsMonnter.apk
           if-no-files-found: error
           retention-days: 14
 
-      - name: Commit merged sources and APK
+      - name: Publish verified source and APK on main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
+          mkdir -p apk
+          cp dist/KidsMonnter.apk apk/KidsMonnter.apk
+          printf '# تحميل التطبيق\n\n[تحميل KidsMonnter APK](./apk/KidsMonnter.apk)\n' > DOWNLOAD_APK.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add lib/main.dart native/MainActivityV2.kt apk/KidsMonnter.apk DOWNLOAD_APK.md
-          git diff --cached --quiet || git commit -m "إعادة بناء شاشة القفل الآمنة وتحديث ملف APK"
+          git diff --cached --quiet || git commit -m "بناء نسخة KidsMonnter الآمنة وتحديث APK"
           git push
