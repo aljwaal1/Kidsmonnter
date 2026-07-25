@@ -51,6 +51,9 @@ jobs:
       - name: Replace lock screen with safe internal keypad
         run: python3 tools/merge_safe_lock_keypad.py
 
+      - name: Merge emergency protection stop into lock screen
+        run: python3 tools/merge_lock_emergency_stop.py
+
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -98,6 +101,8 @@ jobs:
           grep -q 'GridLayout(this)' native/MainActivityV2.kt
           grep -q 'unlockWithPin(addTime = true)' native/MainActivityV2.kt
           grep -q 'unlockWithPin(addTime = false)' native/MainActivityV2.kt
+          grep -q 'disableProtectionWithPin()' native/MainActivityV2.kt
+          grep -q 'text = "إيقاف الحماية"' native/MainActivityV2.kt
           ! sed -n '/class LockActivity/,/class KidsMonnterDeviceAdminReceiver/p' native/MainActivityV2.kt | grep -q 'EditText(this)'
           ! sed -n '/class LockActivity/,/class KidsMonnterDeviceAdminReceiver/p' native/MainActivityV2.kt | grep -q 'FLAG_TURN_SCREEN_ON'
           ! grep -q 'PendingIntent.getService' native/MainActivityV2.kt
