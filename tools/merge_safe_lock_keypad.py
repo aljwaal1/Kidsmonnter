@@ -150,7 +150,7 @@ replacement = r'''class LockActivity : Activity() {
 
         val scroll = ScrollView(this).apply {
             isFillViewport = true
-            addView(root, ScrollView.LayoutParams(-1, -2))
+            addView(root, FrameLayout.LayoutParams(-1, -2))
         }
         refreshPinUi()
         return scroll
