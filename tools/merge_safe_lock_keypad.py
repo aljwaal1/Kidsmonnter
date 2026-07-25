@@ -35,13 +35,18 @@ replacement = r'''class LockActivity : Activity() {
     override fun onPause() {
         super.onPause()
         if (!authorizedExit && shouldRemainLocked()) handler.postDelayed({
-            try {
-                startActivity(Intent(this, LockActivity::class.java).addFlags(
-                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                ))
-            } catch (_: Exception) {}
+            if (!authorizedExit && shouldRemainLocked() && isScreenInteractive()) {
+                try {
+                    startActivity(Intent(this, LockActivity::class.java).addFlags(
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    ))
+                } catch (_: Exception) {}
+            }
         }, 800L)
     }
+
+    private fun isScreenInteractive(): Boolean =
+        (getSystemService(POWER_SERVICE) as PowerManager).isInteractive
 
     private fun shouldRemainLocked(): Boolean {
         if (!prefs.getBoolean("enabled", false)) return false
