@@ -131,6 +131,14 @@ jobs:
           cp build/app/outputs/flutter-apk/app-release.apk apk/KidsMonnter.apk
           printf '# تحميل التطبيق\n\n[تحميل KidsMonnter APK](./apk/KidsMonnter.apk)\n' > DOWNLOAD_APK.md
 
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KidsMonnter-${{ github.sha }}
+          path: apk/KidsMonnter.apk
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Commit merged sources and APK
         run: |
           git config user.name "github-actions[bot]"
