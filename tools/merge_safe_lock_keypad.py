@@ -45,6 +45,11 @@ replacement = r'''class LockActivity : Activity() {
         }, 800L)
     }
 
+    override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        super.onDestroy()
+    }
+
     private fun isScreenInteractive(): Boolean =
         (getSystemService(POWER_SERVICE) as PowerManager).isInteractive
 
