@@ -48,6 +48,7 @@ jobs:
             python3 tools/merge_lock_emergency_stop.py
             python3 tools/merge_safe_policy_release.py
             python3 tools/merge_runtime_diagnostics.py
+            python3 tools/merge_runtime_diagnostics_contract_compat.py
           } > merge-diagnostics.log 2>&1
           status=$?
           cat merge-diagnostics.log
