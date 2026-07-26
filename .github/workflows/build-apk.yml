@@ -41,7 +41,7 @@ jobs:
           python3 tools/merge_notification_permission.py
           python3 tools/merge_guard_notification_navigation.py
           python3 tools/merge_lock_launch_cooldown.py
-          python3 tools/merge_background_lock_overlay.py
+          python3 tools/merge_background_lock_overlay_v2.py
           python3 tools/merge_safe_lock_keypad.py
           python3 tools/merge_lock_emergency_stop.py
           python3 tools/merge_safe_policy_release.py
