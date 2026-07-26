@@ -33,17 +33,33 @@ jobs:
 
       - name: Merge protection hardening into build sources
         run: |
-          python3 tools/merge_preflight_hardening.py
-          python3 tools/merge_service_watchdog.py
-          python3 tools/merge_service_restart_channel.py
-          python3 tools/merge_status_self_heal.py
-          python3 tools/merge_service_restart_cooldown.py
-          python3 tools/merge_notification_permission.py
-          python3 tools/merge_guard_notification_navigation.py
-          python3 tools/merge_lock_launch_cooldown.py
-          python3 tools/merge_safe_lock_keypad.py
-          python3 tools/merge_lock_emergency_stop.py
-          python3 tools/merge_safe_policy_release.py
+          set +e
+          {
+            python3 tools/merge_preflight_hardening.py
+            python3 tools/merge_service_watchdog.py
+            python3 tools/merge_service_restart_channel.py
+            python3 tools/merge_status_self_heal.py
+            python3 tools/merge_service_restart_cooldown.py
+            python3 tools/merge_notification_permission.py
+            python3 tools/merge_guard_notification_navigation.py
+            python3 tools/merge_lock_launch_cooldown.py
+            python3 tools/merge_background_lock_overlay_v2.py
+            python3 tools/merge_safe_lock_keypad.py
+            python3 tools/merge_lock_emergency_stop.py
+            python3 tools/merge_safe_policy_release.py
+          } > merge-diagnostics.log 2>&1
+          status=$?
+          cat merge-diagnostics.log
+          exit $status
+
+      - name: Upload merge diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: merge-diagnostics-${{ github.sha }}
+          path: merge-diagnostics.log
+          if-no-files-found: error
+          retention-days: 2
 
       - name: Verify critical protection contracts
         run: |
@@ -56,6 +72,7 @@ jobs:
           test -f test/notification_permission_contract_test.dart
           test -f test/guard_notification_navigation_contract_test.dart
           test -f test/lock_launch_cooldown_contract_test.dart
+          test -f test/background_lock_overlay_contract_test.dart
           test -f test/safe_lock_keypad_contract_test.dart
           test -f test/lock_emergency_stop_contract_test.dart
           test -f test/safe_policy_release_contract_test.dart
@@ -65,12 +82,16 @@ jobs:
           grep -q 'requestNotificationPermissionIfNeeded' native/MainActivityV2.kt
           grep -q 'guardNotificationContentIntent' native/MainActivityV2.kt
           grep -q 'LOCK_LAUNCH_COOLDOWN_MS' native/MainActivityV2.kt
+          grep -q 'BACKGROUND_LOCK_OVERLAY_MARKER' native/MainActivityV2.kt
+          grep -q 'TYPE_APPLICATION_OVERLAY' native/MainActivityV2.kt
+          grep -q 'manager.addView(view, params)' native/MainActivityV2.kt
           grep -q 'GridLayout(this)' native/MainActivityV2.kt
           grep -q 'unlockWithPin(addTime = true)' native/MainActivityV2.kt
           grep -q 'unlockWithPin(addTime = false)' native/MainActivityV2.kt
           grep -q 'disableProtectionWithPin()' native/MainActivityV2.kt
           grep -q 'releaseDeviceOwnerPolicies()' native/MainActivityV2.kt
           grep -q 'text = "إيقاف الحماية"' native/MainActivityV2.kt
+          ! sed -n '/class MonitorService/,/class LockActivity/p' native/MainActivityV2.kt | grep -q 'startActivity(Intent(this, LockActivity::class.java)'
           ! sed -n '/class LockActivity/,/class KidsMonnterDeviceAdminReceiver/p' native/MainActivityV2.kt | grep -q 'EditText(this)'
           ! sed -n '/class LockActivity/,/class KidsMonnterDeviceAdminReceiver/p' native/MainActivityV2.kt | grep -q 'FLAG_TURN_SCREEN_ON'
           ! grep -q 'PendingIntent.getService' native/MainActivityV2.kt
