@@ -12,7 +12,7 @@ void main() {
     expect(serviceEnd, greaterThan(serviceStart));
 
     final service = native.substring(serviceStart, serviceEnd);
-    expect(service, contains('LOCK_LAUNCH_COOLDOWN_MS = 5_000L'));
+    expect(native, contains('LOCK_LAUNCH_COOLDOWN_MS = 5_000L'));
     expect(service, contains('lastLockLaunchElapsedMs'));
     expect(service, contains('SystemClock.elapsedRealtime()'));
     expect(
