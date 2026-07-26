@@ -47,6 +47,8 @@ jobs:
             python3 tools/merge_safe_lock_keypad.py
             python3 tools/merge_lock_emergency_stop.py
             python3 tools/merge_safe_policy_release.py
+            python3 tools/merge_runtime_diagnostics.py
+            python3 tools/merge_runtime_diagnostics_contract_compat.py
           } > merge-diagnostics.log 2>&1
           status=$?
           cat merge-diagnostics.log
@@ -76,6 +78,7 @@ jobs:
           test -f test/safe_lock_keypad_contract_test.dart
           test -f test/lock_emergency_stop_contract_test.dart
           test -f test/safe_policy_release_contract_test.dart
+          test -f test/runtime_diagnostics_contract_test.dart
           grep -q 'uninstallBlocked' lib/main.dart
           grep -q 'PendingIntent.getBroadcast' native/MainActivityV2.kt
           grep -q 'MONITOR_WATCHDOG_ACTION' native/MainActivityV2.kt
@@ -85,6 +88,11 @@ jobs:
           grep -q 'BACKGROUND_LOCK_OVERLAY_MARKER' native/MainActivityV2.kt
           grep -q 'TYPE_APPLICATION_OVERLAY' native/MainActivityV2.kt
           grep -q 'manager.addView(view, params)' native/MainActivityV2.kt
+          grep -q 'RUNTIME_DIAGNOSTICS_MARKER' native/MainActivityV2.kt
+          grep -q 'SERVICE_HEARTBEAT' native/MainActivityV2.kt
+          grep -q 'TICK_ERROR' native/MainActivityV2.kt
+          grep -q 'RUNTIME_DIAGNOSTICS_UI_MARKER' lib/main.dart
+          grep -q 'getDiagnosticLog' lib/main.dart
           grep -q 'GridLayout(this)' native/MainActivityV2.kt
           grep -q 'unlockWithPin(addTime = true)' native/MainActivityV2.kt
           grep -q 'unlockWithPin(addTime = false)' native/MainActivityV2.kt
@@ -134,7 +142,21 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Run tests
-        run: flutter test
+        run: |
+          set +e
+          flutter test > flutter-test.log 2>&1
+          status=$?
+          cat flutter-test.log
+          exit $status
+
+      - name: Upload Flutter test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-test-diagnostics-${{ github.sha }}
+          path: flutter-test.log
+          if-no-files-found: error
+          retention-days: 2
 
       - name: Build release APK
         run: flutter build apk --release
