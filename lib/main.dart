@@ -424,6 +424,73 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  // RUNTIME_DIAGNOSTICS_UI_MARKER
+  Future<void> _showDiagnosticLog() async {
+    try {
+      final log = await _channel.invokeMethod<String>('getDiagnosticLog') ?? '';
+      if (!mounted) return;
+
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('سجل تشخيص التطبيق'),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: 480,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Scrollbar(
+                  child: SingleChildScrollView(
+                    child: SelectableText(
+                      log.isEmpty ? 'لا توجد بيانات مسجلة بعد.' : log,
+                      textDirection: TextDirection.ltr,
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton.icon(
+              onPressed: log.isEmpty
+                  ? null
+                  : () async {
+                      await Clipboard.setData(ClipboardData(text: log));
+                      _showMessage('تم نسخ سجل التشخيص.');
+                    },
+              icon: const Icon(Icons.copy_all_outlined),
+              label: const Text('نسخ السجل'),
+            ),
+            TextButton.icon(
+              onPressed: () async {
+                await _channel.invokeMethod<void>('clearDiagnosticLog');
+                if (dialogContext.mounted) Navigator.pop(dialogContext);
+                _showMessage('تم مسح السجل وبدأ تسجيل جديد.');
+              },
+              icon: const Icon(Icons.delete_sweep_outlined),
+              label: const Text('مسح'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('إغلاق'),
+            ),
+          ],
+        ),
+      );
+    } on PlatformException catch (error) {
+      _showMessage(error.message ?? 'تعذر قراءة سجل التشخيص.');
+    }
+  }
+
   Future<void> _resolveDiagnosticAction(GuardDiagnosticAction action) async {
     await _runBusy(() async {
       try {
@@ -706,6 +773,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   textDirection: TextDirection.ltr,
                 ),
                 onTap: _busy ? null : _editParentEmail,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.bug_report_outlined),
+                title: const Text('سجل تشخيص التطبيق'),
+                subtitle: const Text(
+                  'يعرض تشغيل الخدمة، احتساب الوقت، المراقب ومحاولات القفل.',
+                ),
+                trailing: const Icon(Icons.chevron_left),
+                onTap: _showDiagnosticLog,
               ),
             ),
             const SizedBox(height: 10),

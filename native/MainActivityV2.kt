@@ -10,6 +10,7 @@ import android.graphics.PixelFormat
 import android.net.Uri
 import android.os.*
 import android.provider.Settings
+import android.util.Log
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
@@ -22,6 +23,7 @@ import io.flutter.plugin.common.MethodChannel
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.*
+import java.io.File
 
 private const val PREFS_NAME = "kidsmonnter"
 private const val GUARD_CHANNEL_ID = "kidsmonnter_guard"
@@ -41,12 +43,81 @@ private const val LAST_SERVICE_START_REQUEST_ELAPSED_KEY = "last_service_start_r
 private const val SERVICE_START_REQUEST_COOLDOWN_MS = 15_000L
 private const val MAX_FAILED_ATTEMPTS = 50
 private const val LOCK_LAUNCH_COOLDOWN_MS = 5_000L
+private const val DIAGNOSTIC_LOG_FILE = "kidsmonnter-diagnostic.log"
+private const val MAX_DIAGNOSTIC_LOG_BYTES = 512 * 1024
+private const val DIAGNOSTIC_HEARTBEAT_INTERVAL_MS = 15_000L
 
 private fun Context.guardPrefs(): SharedPreferences =
     getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
 private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 private fun timestamp(): String = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+
+// RUNTIME_DIAGNOSTICS_MARKER: persistent runtime logging for background-service failures.
+private fun Context.appendGuardLog(event: String, details: String = "", error: Throwable? = null) {
+    val normalizedDetails = details.replace("\n", " ").replace("\r", " ").take(1600)
+    val line = buildString {
+        append(timestamp())
+        append(" | uptime=")
+        append(SystemClock.elapsedRealtime())
+        append(" | pid=")
+        append(Process.myPid())
+        append(" | ")
+        append(event)
+        if (normalizedDetails.isNotBlank()) {
+            append(" | ")
+            append(normalizedDetails)
+        }
+        if (error != null) {
+            append(" | ")
+            append(error.javaClass.simpleName)
+            append(": ")
+            append(error.message.orEmpty().replace("\n", " ").take(800))
+        }
+    }
+
+    if (error == null) Log.i("KidsMonnterGuard", line) else Log.e("KidsMonnterGuard", line, error)
+
+    try {
+        val file = File(filesDir, DIAGNOSTIC_LOG_FILE)
+        if (file.exists() && file.length() > MAX_DIAGNOSTIC_LOG_BYTES.toLong()) {
+            val tail = file.readText().takeLast(MAX_DIAGNOSTIC_LOG_BYTES / 2)
+            file.writeText("${timestamp()} | LOG_ROTATED | retained newest entries\n$tail")
+        }
+        file.appendText(line + "\n")
+    } catch (loggingError: Exception) {
+        Log.e("KidsMonnterGuard", "Unable to persist diagnostic log", loggingError)
+    }
+}
+
+private fun Context.readGuardLog(): String {
+    val prefs = guardPrefs()
+    val snapshot = buildString {
+        appendLine("KidsMonnter diagnostic snapshot")
+        appendLine("generated=${timestamp()}")
+        appendLine("enabled=${prefs.getBoolean("enabled", false)}")
+        appendLine("date=${prefs.getString("date", "")}")
+        appendLine("usedSeconds=${prefs.getInt("used_seconds", 0)}")
+        appendLine("dailyMinutes=${prefs.getInt("daily_minutes", 60)}")
+        appendLine("heartbeatMs=${prefs.getLong(HEARTBEAT_KEY, 0L)}")
+        appendLine("lastTickElapsedMs=${prefs.getLong(LAST_TICK_KEY, 0L)}")
+        appendLine("overlayAllowed=${Settings.canDrawOverlays(this@readGuardLog)}")
+        appendLine("sdk=${Build.VERSION.SDK_INT}")
+        appendLine("manufacturer=${Build.MANUFACTURER}")
+        appendLine("model=${Build.MODEL}")
+        appendLine("----------------------------------------")
+    }
+    val file = File(filesDir, DIAGNOSTIC_LOG_FILE)
+    return snapshot + if (file.exists()) file.readText() else "No runtime entries yet."
+}
+
+private fun Context.clearGuardLog() {
+    try {
+        File(filesDir, DIAGNOSTIC_LOG_FILE).delete()
+    } catch (error: Exception) {
+        Log.e("KidsMonnterGuard", "Unable to clear diagnostic log", error)
+    }
+}
 
 private fun hashPin(pin: String): String {
     val bytes = MessageDigest.getInstance("SHA-256").digest("KidsMonnter:$pin".toByteArray())
@@ -72,7 +143,13 @@ private fun verifyPin(prefs: SharedPreferences, candidate: String): Boolean {
 
 private fun Context.startMonitorServiceSafely() {
     val intent = Intent(this, MonitorService::class.java)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+    appendGuardLog("SERVICE_START_REQUEST", "sdk=${Build.VERSION.SDK_INT}")
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+    } catch (error: Exception) {
+        appendGuardLog("SERVICE_START_REQUEST_FAILED", error = error)
+        throw error
+    }
 }
 
 private fun Activity.requestNotificationPermissionIfNeeded() {
@@ -207,6 +284,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        appendGuardLog("APP_ENGINE_READY", "activity=${javaClass.simpleName}")
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName).setMethodCallHandler { call, result ->
             val prefs = guardPrefs()
             when (call.method) {
@@ -268,6 +346,7 @@ class MainActivity : FlutterActivity() {
                         .remove("unlocked_date")
                         .remove(LAST_TICK_KEY)
                         .commit()
+                    appendGuardLog("PROTECTION_ENABLED", "minutes=$minutes used=${prefs.getInt("used_seconds", 0)}")
                     requestNotificationPermissionIfNeeded()
                     startMonitorServiceSafely()
                     result.success(true)
@@ -276,6 +355,7 @@ class MainActivity : FlutterActivity() {
                     if (!prefs.getBoolean("enabled", false)) {
                         result.error("PROTECTION_DISABLED", "الحماية غير مفعلة", null)
                     } else {
+                        appendGuardLog("MANUAL_SERVICE_RESTART", "requestedFromUi=true")
                         startMonitorServiceSafely()
                         result.success(true)
                     }
@@ -287,6 +367,7 @@ class MainActivity : FlutterActivity() {
                         result.error("WRONG_PIN", "رمز ولي الأمر غير صحيح", null)
                     } else {
                         prefs.edit().putBoolean("enabled", false).remove(LAST_TICK_KEY).commit()
+                        appendGuardLog("PROTECTION_DISABLED", "source=main_activity")
                         releaseDeviceOwnerPolicies()
                         stopService(Intent(this, MonitorService::class.java))
                         result.success(true)
@@ -302,12 +383,25 @@ class MainActivity : FlutterActivity() {
                         val used = prefs.getInt("used_seconds", 0)
                         prefs.edit().putInt("used_seconds", (used - minutes * 60).coerceAtLeast(0))
                             .remove("unlocked_date").apply()
+                        appendGuardLog("TIME_ADDED", "minutes=$minutes before=$used after=${prefs.getInt("used_seconds", 0)}")
                         result.success(true)
                     }
                 }
+                "getDiagnosticLog" -> {
+                    appendGuardLog("DIAGNOSTIC_LOG_VIEWED")
+                    result.success(readGuardLog())
+                }
+                "clearDiagnosticLog" -> {
+                    clearGuardLog()
+                    appendGuardLog("DIAGNOSTIC_LOG_CLEARED")
+                    result.success(true)
+                }
                 "getFailedAttempts" -> result.success(readFailedAttempts(prefs))
                 "getStatus" -> {
-                    if (shouldRecoverProtectionService(prefs)) requestMonitorServiceStartIfAllowed(prefs)
+                    // RUNTIME_DIAGNOSTICS_CONTRACT_COMPAT_MARKER
+                    if (shouldRecoverProtectionService(prefs)) requestMonitorServiceStartIfAllowed(prefs).also {
+                        appendGuardLog("STATUS_SELF_HEAL", "heartbeat=${prefs.getLong(HEARTBEAT_KEY, 0L)} requested=$it")
+                    }
                     result.success(mapOf(
                         "enabled" to prefs.getBoolean("enabled", false),
                         "usedSeconds" to prefs.getInt("used_seconds", 0),
@@ -366,44 +460,65 @@ class MonitorService : Service() {
     private var lockOverlayPinDisplay: TextView? = null
     private var lockOverlayStatus: TextView? = null
     private var lockOverlayActionButtons: List<Button> = emptyList()
+    private var lastDiagnosticHeartbeatElapsedMs = 0L
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                Intent.ACTION_SCREEN_OFF -> {
-                    accountElapsedUsage()
-                    screenOn = false
-                    resetClockAnchor()
+            try {
+                appendGuardLog("SCREEN_EVENT", "action=${intent?.action.orEmpty()} screenOnBefore=$screenOn")
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_OFF -> {
+                        accountElapsedUsage()
+                        screenOn = false
+                        resetClockAnchor()
+                    }
+                    Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                        screenOn = true
+                        resetClockAnchor()
+                        enforceLockIfNeeded()
+                    }
                 }
-                Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
-                    screenOn = true
-                    resetClockAnchor()
-                    enforceLockIfNeeded()
-                }
+            } catch (error: Exception) {
+                appendGuardLog("SCREEN_EVENT_ERROR", "action=${intent?.action.orEmpty()}", error)
             }
         }
     }
 
     private val ticker = object : Runnable {
         override fun run() {
-            resetIfNewDay()
-            prefs.edit()
-                .putLong(HEARTBEAT_KEY, System.currentTimeMillis())
-                .remove(LAST_SERVICE_START_REQUEST_ELAPSED_KEY)
-                .apply()
-            if (prefs.getBoolean("enabled", false)) {
-                monitorOverlayPermission()
-                accountElapsedUsage()
-                enforceLockIfNeeded()
-            } else {
-                resetClockAnchor()
+            try {
+                resetIfNewDay()
+                prefs.edit()
+                    .putLong(HEARTBEAT_KEY, System.currentTimeMillis())
+                    .remove(LAST_SERVICE_START_REQUEST_ELAPSED_KEY)
+                    .apply()
+                if (prefs.getBoolean("enabled", false)) {
+                    monitorOverlayPermission()
+                    accountElapsedUsage()
+                    enforceLockIfNeeded()
+                } else {
+                    resetClockAnchor()
+                }
+
+                val nowElapsed = SystemClock.elapsedRealtime()
+                if (nowElapsed - lastDiagnosticHeartbeatElapsedMs >= DIAGNOSTIC_HEARTBEAT_INTERVAL_MS) {
+                    lastDiagnosticHeartbeatElapsedMs = nowElapsed
+                    appendGuardLog(
+                        "SERVICE_HEARTBEAT",
+                        "enabled=${prefs.getBoolean("enabled", false)} screenOn=$screenOn used=${prefs.getInt("used_seconds", 0)} limit=${prefs.getInt("daily_minutes", 60) * 60} overlay=${Settings.canDrawOverlays(this@MonitorService)} lockVisible=${lockOverlayView != null}",
+                    )
+                }
+            } catch (error: Exception) {
+                appendGuardLog("TICK_ERROR", "screenOn=$screenOn", error)
+            } finally {
+                handler.postDelayed(this, 1000L)
             }
-            handler.postDelayed(this, 1000L)
         }
     }
 
     override fun onCreate() {
         super.onCreate()
+        appendGuardLog("SERVICE_CREATED", "enabled=${prefs.getBoolean("enabled", false)}")
         createChannel(this, GUARD_CHANNEL_ID, "حماية وقت الهاتف", NotificationManager.IMPORTANCE_LOW)
         screenOn = (getSystemService(POWER_SERVICE) as PowerManager).isInteractive
         @Suppress("DEPRECATION")
@@ -416,22 +531,30 @@ class MonitorService : Service() {
         startForeground(NOTIFICATION_ID, buildGuardNotification("الحماية تعمل الآن"))
         scheduleMonitorWatchdog()
         handler.post(ticker)
+        appendGuardLog("SERVICE_FOREGROUND_READY", "screenOn=$screenOn")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        resetClockAnchor()
-        enforceLockIfNeeded()
+        appendGuardLog("SERVICE_START_COMMAND", "action=${intent?.action.orEmpty()} flags=$flags startId=$startId")
+        try {
+            resetClockAnchor()
+            enforceLockIfNeeded()
+        } catch (error: Exception) {
+            appendGuardLog("SERVICE_START_COMMAND_ERROR", error = error)
+        }
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?) = null
 
     override fun onTaskRemoved(rootIntent: Intent?) {
+        appendGuardLog("SERVICE_TASK_REMOVED", "enabled=${prefs.getBoolean("enabled", false)}")
         scheduleRestart()
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
+        appendGuardLog("SERVICE_DESTROYED", "enabled=${prefs.getBoolean("enabled", false)}")
         accountElapsedUsage()
         dismissLockOverlay()
         handler.removeCallbacks(ticker)
@@ -464,7 +587,12 @@ class MonitorService : Service() {
         val limit = prefs.getInt("daily_minutes", 60).coerceAtLeast(1) * 60
         val before = prefs.getInt("used_seconds", 0).coerceAtLeast(0)
         val after = (before + elapsedSeconds).coerceAtMost(limit)
-        if (after != before) prefs.edit().putInt("used_seconds", after).apply()
+        if (after != before) {
+            prefs.edit().putInt("used_seconds", after).apply()
+            if (after == limit || after % 15 == 0) {
+                appendGuardLog("USAGE_ACCOUNTED", "before=$before after=$after elapsed=$elapsedSeconds limit=$limit")
+            }
+        }
 
         if (before < limit - 300 && after >= limit - 300) notifyWarning("تبقّى 5 دقائق من وقت الهاتف")
         if (before < limit - 60 && after >= limit - 60) notifyWarning("تبقّت دقيقة واحدة من وقت الهاتف")
@@ -495,6 +623,7 @@ class MonitorService : Service() {
     private fun showLock() {
         if (lockOverlayView != null) return
         if (!Settings.canDrawOverlays(this)) {
+            appendGuardLog("LOCK_BLOCKED_NO_OVERLAY_PERMISSION")
             notifyWarning("انتهى وقت الهاتف. فعّل صلاحية الظهور فوق التطبيقات ليعمل القفل تلقائياً")
             return
         }
@@ -502,6 +631,7 @@ class MonitorService : Service() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastLockLaunchElapsedMs < LOCK_LAUNCH_COOLDOWN_MS) return
         lastLockLaunchElapsedMs = now
+        appendGuardLog("LOCK_CREATE_ATTEMPT", "used=${prefs.getInt("used_seconds", 0)} limit=${prefs.getInt("daily_minutes", 60) * 60}")
 
         try {
             configureDeviceOwnerPolicies()
@@ -528,7 +658,9 @@ class MonitorService : Service() {
             lockWindowManager = manager
             lockOverlayView = view
             refreshBackgroundLockPinUi()
-        } catch (_: Exception) {
+            appendGuardLog("LOCK_CREATED", "overlayType=$overlayType")
+        } catch (error: Exception) {
+            appendGuardLog("LOCK_CREATE_FAILED", error = error)
             dismissLockOverlay()
             notifyWarning("انتهى وقت الهاتف، لكن تعذر إنشاء شاشة القفل التلقائية")
         }
@@ -699,6 +831,7 @@ class MonitorService : Service() {
         if (!Settings.canDrawOverlays(this)) {
             if (!overlayWarningRecorded) {
                 overlayWarningRecorded = true
+                appendGuardLog("OVERLAY_PERMISSION_MISSING")
                 recordFailedAttempt(this, prefs, "تم إلغاء صلاحية شاشة القفل")
             }
         } else overlayWarningRecorded = false
@@ -954,13 +1087,23 @@ class KidsMonnterDeviceAdminReceiver : DeviceAdminReceiver()
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val prefs = context.guardPrefs()
-        if (!prefs.getBoolean("enabled", false)) return
+        val enabled = prefs.getBoolean("enabled", false)
+        context.appendGuardLog("BOOT_RECEIVER", "action=${intent?.action.orEmpty()} enabled=$enabled")
+        if (!enabled) return
 
         val isWatchdog = intent?.action == MONITOR_WATCHDOG_ACTION
         val heartbeatAge = System.currentTimeMillis() - prefs.getLong(HEARTBEAT_KEY, 0L)
         val serviceNeedsRestart = !isWatchdog || heartbeatAge < 0L || heartbeatAge > STALE_HEARTBEAT_MS
+        context.appendGuardLog(
+            "WATCHDOG_DECISION",
+            "isWatchdog=$isWatchdog heartbeatAge=$heartbeatAge restart=$serviceNeedsRestart",
+        )
 
-        if (serviceNeedsRestart) context.requestMonitorServiceStartIfAllowed(prefs, force = !isWatchdog)
-        context.scheduleMonitorWatchdog()
+        try {
+            if (serviceNeedsRestart) context.requestMonitorServiceStartIfAllowed(prefs, force = !isWatchdog)
+            context.scheduleMonitorWatchdog()
+        } catch (error: Exception) {
+            context.appendGuardLog("BOOT_RECEIVER_ERROR", error = error)
+        }
     }
 }
