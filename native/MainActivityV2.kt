@@ -36,7 +36,10 @@ private const val MONITOR_WATCHDOG_ACTION = "com.explapp.kidstimeguard.RESTART_M
 private const val WATCHDOG_REQUEST_CODE = 991
 private const val WATCHDOG_INTERVAL_MS = 60_000L
 private const val STALE_HEARTBEAT_MS = 30_000L
+private const val LAST_SERVICE_START_REQUEST_ELAPSED_KEY = "last_service_start_request_elapsed_ms"
+private const val SERVICE_START_REQUEST_COOLDOWN_MS = 15_000L
 private const val MAX_FAILED_ATTEMPTS = 50
+private const val LOCK_LAUNCH_COOLDOWN_MS = 5_000L
 
 private fun Context.guardPrefs(): SharedPreferences =
     getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -98,6 +101,21 @@ private fun shouldRecoverProtectionService(prefs: SharedPreferences): Boolean {
     return age > 30_000L || age < -5_000L
 }
 
+private fun Context.requestMonitorServiceStartIfAllowed(
+    prefs: SharedPreferences,
+    force: Boolean = false,
+): Boolean {
+    val now = SystemClock.elapsedRealtime()
+    val lastRequest = prefs.getLong(LAST_SERVICE_START_REQUEST_ELAPSED_KEY, 0L)
+    val requestIsRecent = lastRequest > 0L && now >= lastRequest &&
+        now - lastRequest < SERVICE_START_REQUEST_COOLDOWN_MS
+    if (!force && requestIsRecent) return false
+
+    prefs.edit().putLong(LAST_SERVICE_START_REQUEST_ELAPSED_KEY, now).apply()
+    startMonitorServiceSafely()
+    return true
+}
+
 private fun Context.scheduleMonitorWatchdog(delayMs: Long = WATCHDOG_INTERVAL_MS) {
     val pending = PendingIntent.getBroadcast(
         this,
@@ -125,6 +143,21 @@ private fun Context.configureDeviceOwnerPolicies() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) manager.setStatusBarDisabled(admin, true)
     } catch (_: SecurityException) {
         // Device-owner policies vary by vendor. Protection continues without kiosk hardening.
+    }
+}
+
+private fun Context.releaseDeviceOwnerPolicies() {
+    val manager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+    if (!manager.isDeviceOwnerApp(packageName)) return
+    try {
+        val admin = deviceAdminComponent()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            manager.setStatusBarDisabled(admin, false)
+        }
+        manager.setUninstallBlocked(admin, packageName, false)
+        manager.setLockTaskPackages(admin, emptyArray<String>())
+    } catch (_: SecurityException) {
+        // The service is still stopped even if a vendor rejects one policy reset.
     }
 }
 
@@ -253,6 +286,7 @@ class MainActivity : FlutterActivity() {
                         result.error("WRONG_PIN", "رمز ولي الأمر غير صحيح", null)
                     } else {
                         prefs.edit().putBoolean("enabled", false).remove(LAST_TICK_KEY).commit()
+                        releaseDeviceOwnerPolicies()
                         stopService(Intent(this, MonitorService::class.java))
                         result.success(true)
                     }
@@ -272,7 +306,7 @@ class MainActivity : FlutterActivity() {
                 }
                 "getFailedAttempts" -> result.success(readFailedAttempts(prefs))
                 "getStatus" -> {
-                    if (shouldRecoverProtectionService(prefs)) startMonitorServiceSafely()
+                    if (shouldRecoverProtectionService(prefs)) requestMonitorServiceStartIfAllowed(prefs)
                     result.success(mapOf(
                         "enabled" to prefs.getBoolean("enabled", false),
                         "usedSeconds" to prefs.getInt("used_seconds", 0),
@@ -324,6 +358,7 @@ class MonitorService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var screenOn = true
     private var overlayWarningRecorded = false
+    private var lastLockLaunchElapsedMs = 0L
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -345,7 +380,10 @@ class MonitorService : Service() {
     private val ticker = object : Runnable {
         override fun run() {
             resetIfNewDay()
-            prefs.edit().putLong(HEARTBEAT_KEY, System.currentTimeMillis()).apply()
+            prefs.edit()
+                .putLong(HEARTBEAT_KEY, System.currentTimeMillis())
+                .remove(LAST_SERVICE_START_REQUEST_ELAPSED_KEY)
+                .apply()
             if (prefs.getBoolean("enabled", false)) {
                 monitorOverlayPermission()
                 accountElapsedUsage()
@@ -446,6 +484,9 @@ class MonitorService : Service() {
 
     private fun showLock() {
         if (!Settings.canDrawOverlays(this)) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastLockLaunchElapsedMs < LOCK_LAUNCH_COOLDOWN_MS) return
+        lastLockLaunchElapsedMs = now
         try {
             startActivity(Intent(this, LockActivity::class.java).addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or
@@ -486,16 +527,17 @@ class LockActivity : Activity() {
     private val prefs by lazy { guardPrefs() }
     private val handler = Handler(Looper.getMainLooper())
     private var authorizedExit = false
+    private val enteredPin = StringBuilder(6)
+    private lateinit var pinDisplay: TextView
+    private lateinit var statusView: TextView
+    private lateinit var addTimeButton: Button
+    private lateinit var unlockTodayButton: Button
+    private lateinit var stopProtectionButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         configureDeviceOwnerPolicies()
-        window.addFlags(
-            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
-        )
+        window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         if (!shouldRemainLocked()) { finish(); return }
         showImmersive()
         val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
@@ -512,13 +554,23 @@ class LockActivity : Activity() {
     override fun onPause() {
         super.onPause()
         if (!authorizedExit && shouldRemainLocked()) handler.postDelayed({
-            try {
-                startActivity(Intent(this, LockActivity::class.java).addFlags(
-                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                ))
-            } catch (_: Exception) {}
-        }, 300L)
+            if (!authorizedExit && shouldRemainLocked() && isScreenInteractive()) {
+                try {
+                    startActivity(Intent(this, LockActivity::class.java).addFlags(
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    ))
+                } catch (_: Exception) {}
+            }
+        }, 800L)
     }
+
+    override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        super.onDestroy()
+    }
+
+    private fun isScreenInteractive(): Boolean =
+        (getSystemService(POWER_SERVICE) as PowerManager).isInteractive
 
     private fun shouldRemainLocked(): Boolean {
         if (!prefs.getBoolean("enabled", false)) return false
@@ -537,8 +589,8 @@ class LockActivity : Activity() {
     private fun buildLockView(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(44, 44, 44, 44)
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(32, 32, 32, 32)
             setBackgroundColor(Color.rgb(25, 42, 39))
         }
         root.addView(TextView(this).apply {
@@ -546,67 +598,153 @@ class LockActivity : Activity() {
             textSize = 28f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-        })
+        }, LinearLayout.LayoutParams(-1, -2))
         root.addView(TextView(this).apply {
-            text = "يمكن لولي الأمر إضافة وقت أو فتح الهاتف لبقية اليوم."
+            text = "أدخل رمز ولي الأمر من لوحة الأرقام الآمنة."
             textSize = 17f
             setTextColor(Color.LTGRAY)
             gravity = Gravity.CENTER
-            setPadding(0, 20, 0, 30)
-        })
+            setPadding(0, 16, 0, 20)
+        }, LinearLayout.LayoutParams(-1, -2))
 
-        val pinInput = EditText(this).apply {
-            hint = "PIN ولي الأمر"
-            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+        pinDisplay = TextView(this).apply {
+            text = "○ ○ ○ ○ ○ ○"
+            textSize = 30f
             setTextColor(Color.WHITE)
-            setHintTextColor(Color.GRAY)
             gravity = Gravity.CENTER
-            filters = arrayOf(android.text.InputFilter.LengthFilter(6))
+            setPadding(12, 18, 12, 18)
+            setBackgroundColor(Color.rgb(38, 62, 58))
+            contentDescription = "رمز ولي الأمر، ست خانات"
         }
-        val status = TextView(this).apply {
+        root.addView(pinDisplay, LinearLayout.LayoutParams(-1, -2))
+
+        statusView = TextView(this).apply {
             setTextColor(Color.rgb(255, 180, 170))
             gravity = Gravity.CENTER
-            setPadding(0, 12, 0, 12)
+            setPadding(0, 10, 0, 10)
         }
-        root.addView(pinInput, LinearLayout.LayoutParams(-1, -2))
-        root.addView(status, LinearLayout.LayoutParams(-1, -2))
+        root.addView(statusView, LinearLayout.LayoutParams(-1, -2))
 
-        root.addView(Button(this).apply {
+        val keypad = GridLayout(this).apply {
+            columnCount = 3
+            rowCount = 4
+            useDefaultMargins = true
+            alignmentMode = GridLayout.ALIGN_BOUNDS
+        }
+        listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "مسح", "0", "⌫").forEach { label ->
+            keypad.addView(Button(this).apply {
+                text = label
+                textSize = if (label.length == 1) 22f else 16f
+                minHeight = 64
+                setOnClickListener {
+                    when (label) {
+                        "مسح" -> enteredPin.clear()
+                        "⌫" -> if (enteredPin.isNotEmpty()) enteredPin.deleteCharAt(enteredPin.lastIndex)
+                        else -> if (enteredPin.length < 6) enteredPin.append(label)
+                    }
+                    statusView.text = ""
+                    refreshPinUi()
+                }
+            }, GridLayout.LayoutParams().apply {
+                width = 0
+                height = GridLayout.LayoutParams.WRAP_CONTENT
+                columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+            })
+        }
+        root.addView(keypad, LinearLayout.LayoutParams(-1, -2))
+
+        addTimeButton = Button(this).apply {
             text = "إضافة 15 دقيقة"
-            setOnClickListener {
-                if (verifyForLock(pinInput.text.toString(), "فتح القفل وإضافة 15 دقيقة", status)) {
-                    val used = prefs.getInt("used_seconds", 0)
-                    prefs.edit().putInt("used_seconds", (used - 900).coerceAtLeast(0)).apply()
-                    exitLock()
-                }
-            }
-        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 10 })
+            isEnabled = false
+            setOnClickListener { unlockWithPin(addTime = true) }
+        }
+        root.addView(addTimeButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 12 })
 
-        root.addView(Button(this).apply {
+        unlockTodayButton = Button(this).apply {
             text = "فتح الهاتف لبقية اليوم"
-            setOnClickListener {
-                if (verifyForLock(pinInput.text.toString(), "فتح الهاتف لبقية اليوم", status)) {
-                    prefs.edit().putString("unlocked_date", today()).apply()
-                    exitLock()
-                }
-            }
-        }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 10 })
-        return root
+            isEnabled = false
+            setOnClickListener { unlockWithPin(addTime = false) }
+        }
+        root.addView(unlockTodayButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 10 })
+
+        stopProtectionButton = Button(this).apply {
+            text = "إيقاف الحماية"
+            isEnabled = false
+            setOnClickListener { disableProtectionWithPin() }
+        }
+        root.addView(stopProtectionButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 10 })
+
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(root, FrameLayout.LayoutParams(-1, -2))
+        }
+        refreshPinUi()
+        return scroll
     }
 
-    private fun verifyForLock(pin: String, source: String, status: TextView): Boolean {
-        val valid = verifyPin(prefs, pin)
-        if (!valid) {
-            recordFailedAttempt(this, prefs, source)
-            status.text = "رمز ولي الأمر غير صحيح. تم تسجيل المحاولة."
+    private fun refreshPinUi() {
+        val dots = MutableList(6) { index -> if (index < enteredPin.length) "●" else "○" }
+        pinDisplay.text = dots.joinToString(" ")
+        val ready = enteredPin.length == 6
+        addTimeButton.isEnabled = ready
+        unlockTodayButton.isEnabled = ready
+        stopProtectionButton.isEnabled = ready
+    }
+
+    private fun disableProtectionWithPin() {
+        val pin = enteredPin.toString()
+        if (!verifyPin(prefs, pin)) {
+            recordFailedAttempt(this, prefs, "إيقاف الحماية من شاشة القفل")
+            statusView.text = "رمز ولي الأمر غير صحيح. حاول مرة أخرى."
+            enteredPin.clear()
+            refreshPinUi()
+            return
         }
-        return valid
+
+        val saved = prefs.edit()
+            .putBoolean("enabled", false)
+            .remove(LAST_TICK_KEY)
+            .commit()
+        if (!saved) {
+            statusView.text = "تعذر إيقاف الحماية. حاول مرة أخرى."
+            return
+        }
+
+        releaseDeviceOwnerPolicies()
+        stopService(Intent(this, MonitorService::class.java))
+        exitLock()
+    }
+
+    private fun unlockWithPin(addTime: Boolean) {
+        val pin = enteredPin.toString()
+        val source = if (addTime) "فتح القفل وإضافة 15 دقيقة" else "فتح الهاتف لبقية اليوم"
+        if (!verifyPin(prefs, pin)) {
+            recordFailedAttempt(this, prefs, source)
+            statusView.text = "رمز ولي الأمر غير صحيح. حاول مرة أخرى."
+            enteredPin.clear()
+            refreshPinUi()
+            return
+        }
+
+        val saved = if (addTime) {
+            val used = prefs.getInt("used_seconds", 0)
+            prefs.edit().putInt("used_seconds", (used - 900).coerceAtLeast(0)).commit()
+        } else {
+            prefs.edit().putString("unlocked_date", today()).commit()
+        }
+        if (!saved) {
+            statusView.text = "تعذر حفظ أمر الفتح. حاول مرة أخرى."
+            return
+        }
+        exitLock()
     }
 
     private fun exitLock() {
         authorizedExit = true
+        handler.removeCallbacksAndMessages(null)
         try { stopLockTask() } catch (_: Exception) {}
         finishAndRemoveTask()
+        overridePendingTransition(0, 0)
     }
 
     @Deprecated("Deprecated in Java")
@@ -624,7 +762,7 @@ class BootReceiver : BroadcastReceiver() {
         val heartbeatAge = System.currentTimeMillis() - prefs.getLong(HEARTBEAT_KEY, 0L)
         val serviceNeedsRestart = !isWatchdog || heartbeatAge < 0L || heartbeatAge > STALE_HEARTBEAT_MS
 
-        if (serviceNeedsRestart) context.startMonitorServiceSafely()
+        if (serviceNeedsRestart) context.requestMonitorServiceStartIfAllowed(prefs, force = !isWatchdog)
         context.scheduleMonitorWatchdog()
     }
 }
