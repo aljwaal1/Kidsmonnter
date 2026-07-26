@@ -141,7 +141,21 @@ jobs:
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Run tests
-        run: flutter test
+        run: |
+          set +e
+          flutter test > flutter-test.log 2>&1
+          status=$?
+          cat flutter-test.log
+          exit $status
+
+      - name: Upload Flutter test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-test-diagnostics-${{ github.sha }}
+          path: flutter-test.log
+          if-no-files-found: error
+          retention-days: 2
 
       - name: Build release APK
         run: flutter build apk --release
