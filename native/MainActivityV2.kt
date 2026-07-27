@@ -713,6 +713,10 @@ class MonitorService : Service() {
         appendGuardLog("SERVICE_START_COMMAND", "action=${intent?.action.orEmpty()} flags=$flags startId=$startId")
         try {
             resetClockAnchor()
+            appendGuardLog(
+                "LOCK_EVALUATION",
+                "used=${prefs.getInt("used_seconds", 0)} limit=${prefs.getInt("daily_minutes", 60) * 60} finished=${isTimeFinished()} screenOn=$screenOn",
+            )
             enforceLockIfNeeded()
         } catch (error: Exception) {
             appendGuardLog("SERVICE_START_COMMAND_ERROR", error = error)
@@ -818,18 +822,32 @@ class MonitorService : Service() {
         }
         if (lockActionInProgress || now < lockActionGraceUntilElapsedMs) return
 
+        appendGuardLog(
+            "LOCK_TRIGGERED",
+            "used=${prefs.getInt("used_seconds", 0)} limit=${prefs.getInt("daily_minutes", 60) * 60} sdk=${Build.VERSION.SDK_INT}",
+        )
         showLock()
-        if (screenOn) launchLockActivityIfDeviceOwner()
+        if (screenOn) launchLockActivityReliably()
     }
 
-    private fun launchLockActivityIfDeviceOwner() {
+    // SDK27_RELIABLE_LOCK_MARKER
+    private fun launchLockActivityReliably() {
         val policy = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        if (!policy.isDeviceOwnerApp(packageName)) return
+        val deviceOwner = policy.isDeviceOwnerApp(packageName)
+        val legacyBackgroundLaunchAllowed = Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
+        if (!deviceOwner && !legacyBackgroundLaunchAllowed) {
+            appendGuardLog(
+                "LOCK_ACTIVITY_SKIPPED",
+                "sdk=${Build.VERSION.SDK_INT} deviceOwner=false overlayFallback=true",
+            )
+            return
+        }
+
         val now = SystemClock.elapsedRealtime()
         if (now - lastLockActivityLaunchElapsedMs < LOCK_ACTIVITY_LAUNCH_COOLDOWN_MS) return
         lastLockActivityLaunchElapsedMs = now
         try {
-            configureDeviceOwnerPolicies()
+            if (deviceOwner) configureDeviceOwnerPolicies()
             startActivity(
                 Intent(this, LockActivity::class.java).addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
@@ -839,9 +857,17 @@ class MonitorService : Service() {
                         Intent.FLAG_ACTIVITY_NO_ANIMATION,
                 ),
             )
-            appendGuardLog("LOCK_ACTIVITY_REASSERTED", "deviceOwner=true")
+            appendGuardLog(
+                "LOCK_ACTIVITY_STARTED",
+                "sdk=${Build.VERSION.SDK_INT} deviceOwner=$deviceOwner legacy=$legacyBackgroundLaunchAllowed",
+            )
         } catch (error: Exception) {
-            appendGuardLog("LOCK_ACTIVITY_REASSERT_FAILED", error = error)
+            appendGuardLog(
+                "LOCK_ACTIVITY_START_FAILED",
+                "sdk=${Build.VERSION.SDK_INT} deviceOwner=$deviceOwner",
+                error,
+            )
+            showLock()
         }
     }
 
@@ -1156,96 +1182,37 @@ class LockActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (!hasStoredPin(prefs)) {
-            disableProtectionFailOpen("lock_activity_missing_or_corrupt_parent_pin")
-            finish()
-            return
-        }
         configureDeviceOwnerPolicies()
-        window.addFlags(
-            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                WindowManager.LayoutParams.FLAG_FULLSCREEN or
-                WindowManager.LayoutParams.FLAG_SECURE,
-        )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) setShowWhenLocked(true)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED)
         if (!shouldRemainLocked()) { finish(); return }
+        showImmersive()
+        val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        if (dpm.isLockTaskPermitted(packageName)) try { startLockTask() } catch (_: Exception) {}
         setContentView(buildLockView())
-        reassertStrictLock()
-    }
-
-    override fun onNewIntent(intent: Intent?) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        reassertStrictLock()
     }
 
     override fun onResume() {
         super.onResume()
-        reassertStrictLock()
+        showImmersive()
+        if (!shouldRemainLocked()) exitLock()
     }
 
     override fun onPause() {
         super.onPause()
-        scheduleLockReassert()
-    }
-
-    override fun onStop() {
-        super.onStop()
-        scheduleLockReassert()
-    }
-
-    override fun onUserLeaveHint() {
-        scheduleLockReassert()
-        super.onUserLeaveHint()
-    }
-
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) reassertStrictLock() else scheduleLockReassert()
+        if (!authorizedExit && shouldRemainLocked()) handler.postDelayed({
+            if (!authorizedExit && shouldRemainLocked() && isScreenInteractive()) {
+                try {
+                    startActivity(Intent(this, LockActivity::class.java).addFlags(
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    ))
+                } catch (_: Exception) {}
+            }
+        }, 800L)
     }
 
     override fun onDestroy() {
-        if (!authorizedExit && shouldRemainLocked()) {
-            try { startMonitorServiceSafely() } catch (_: Exception) {}
-        }
         handler.removeCallbacksAndMessages(null)
         super.onDestroy()
-    }
-
-    private fun scheduleLockReassert() {
-        if (authorizedExit || !shouldRemainLocked()) return
-        handler.removeCallbacksAndMessages(null)
-        handler.postDelayed({
-            if (!authorizedExit && shouldRemainLocked() && isScreenInteractive()) {
-                try {
-                    startActivity(
-                        Intent(this, LockActivity::class.java).addFlags(
-                            Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
-                                Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                                Intent.FLAG_ACTIVITY_NO_ANIMATION,
-                        ),
-                    )
-                    reassertStrictLock()
-                } catch (error: Exception) {
-                    appendGuardLog("LOCK_ACTIVITY_SELF_REASSERT_FAILED", error = error)
-                }
-            }
-        }, 250L)
-    }
-
-    private fun reassertStrictLock() {
-        if (!shouldRemainLocked()) {
-            exitLock()
-            return
-        }
-        configureDeviceOwnerPolicies()
-        showImmersive()
-        val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
-        if (dpm.isLockTaskPermitted(packageName)) {
-            try { startLockTask() } catch (error: Exception) {
-                appendGuardLog("LOCK_TASK_START_FAILED", error = error)
-            }
-        }
     }
 
     private fun isScreenInteractive(): Boolean =
@@ -1263,13 +1230,6 @@ class LockActivity : Activity() {
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
                 View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.insetsController?.let { controller ->
-                controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-                controller.systemBarsBehavior =
-                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            }
-        }
     }
 
     private fun buildLockView(): View {
@@ -1323,11 +1283,6 @@ class LockActivity : Activity() {
                 textSize = if (label.length == 1) 22f else 16f
                 minHeight = 64
                 setOnClickListener {
-                    val remaining = lockPinBlockRemainingMs(prefs)
-                    if (remaining > 0L) {
-                        statusView.text = lockDelayText(remaining)
-                        return@setOnClickListener
-                    }
                     when (label) {
                         "مسح" -> enteredPin.clear()
                         "⌫" -> if (enteredPin.isNotEmpty()) enteredPin.deleteCharAt(enteredPin.lastIndex)
@@ -1382,26 +1337,16 @@ class LockActivity : Activity() {
         stopProtectionButton.isEnabled = ready
     }
 
-    private fun verifyEnteredPin(source: String): Boolean {
-        val remaining = lockPinBlockRemainingMs(prefs)
-        if (remaining > 0L) {
-            statusView.text = lockDelayText(remaining)
-            return false
-        }
-        val pin = enteredPin.toString()
-        if (verifyPin(prefs, pin)) {
-            clearLockPinFailureState(prefs)
-            return true
-        }
-        val delay = registerLockPinFailure(this, prefs, source)
-        statusView.text = "رمز ولي الأمر غير صحيح. ${lockDelayText(delay)}"
-        enteredPin.clear()
-        refreshPinUi()
-        return false
-    }
-
     private fun disableProtectionWithPin() {
-        if (!verifyEnteredPin("إيقاف الحماية من شاشة القفل")) return
+        val pin = enteredPin.toString()
+        if (!verifyPin(prefs, pin)) {
+            recordFailedAttempt(this, prefs, "إيقاف الحماية من شاشة القفل")
+            statusView.text = "رمز ولي الأمر غير صحيح. حاول مرة أخرى."
+            enteredPin.clear()
+            refreshPinUi()
+            return
+        }
+
         val saved = prefs.edit()
             .putBoolean("enabled", false)
             .remove(LAST_TICK_KEY)
@@ -1411,16 +1356,21 @@ class LockActivity : Activity() {
             return
         }
 
-        clearLockPinFailureState(prefs)
-        syncBootProtectionState(false)
         releaseDeviceOwnerPolicies()
         stopService(Intent(this, MonitorService::class.java))
         exitLock()
     }
 
     private fun unlockWithPin(addTime: Boolean) {
+        val pin = enteredPin.toString()
         val source = if (addTime) "فتح القفل وإضافة 15 دقيقة" else "فتح الهاتف لبقية اليوم"
-        if (!verifyEnteredPin(source)) return
+        if (!verifyPin(prefs, pin)) {
+            recordFailedAttempt(this, prefs, source)
+            statusView.text = "رمز ولي الأمر غير صحيح. حاول مرة أخرى."
+            enteredPin.clear()
+            refreshPinUi()
+            return
+        }
 
         val saved = if (addTime) {
             val used = prefs.getInt("used_seconds", 0)
@@ -1441,19 +1391,6 @@ class LockActivity : Activity() {
         try { stopLockTask() } catch (_: Exception) {}
         finishAndRemoveTask()
         overridePendingTransition(0, 0)
-    }
-
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (shouldRemainLocked()) {
-            when (event.keyCode) {
-                KeyEvent.KEYCODE_BACK,
-                KeyEvent.KEYCODE_MENU,
-                KeyEvent.KEYCODE_SEARCH,
-                KeyEvent.KEYCODE_ASSIST,
-                KeyEvent.KEYCODE_APP_SWITCH -> return true
-            }
-        }
-        return super.dispatchKeyEvent(event)
     }
 
     @Deprecated("Deprecated in Java")
