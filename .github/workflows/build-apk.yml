@@ -50,6 +50,7 @@ jobs:
             python3 tools/merge_runtime_diagnostics.py
             python3 tools/merge_runtime_diagnostics_contract_compat.py
             python3 tools/merge_strict_runtime_resilience.py
+            python3 tools/merge_strict_runtime_contract_compat.py
           } > merge-diagnostics.log 2>&1
           status=$?
           cat merge-diagnostics.log
@@ -96,6 +97,7 @@ jobs:
           grep -q 'RUNTIME_DIAGNOSTICS_UI_MARKER' lib/main.dart
           grep -q 'getDiagnosticLog' lib/main.dart
           grep -q 'STRICT_RUNTIME_RESILIENCE_MARKER' native/MainActivityV2.kt
+          grep -q 'STRICT_RUNTIME_CONTRACT_COMPAT_MARKER' native/MainActivityV2.kt
           grep -q 'setExactAndAllowWhileIdle' native/MainActivityV2.kt
           grep -q 'createDeviceProtectedStorageContext' native/MainActivityV2.kt
           grep -q 'scheduleBootRetries' native/MainActivityV2.kt
