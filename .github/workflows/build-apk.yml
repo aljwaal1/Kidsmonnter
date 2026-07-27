@@ -51,6 +51,7 @@ jobs:
             python3 tools/merge_runtime_diagnostics_contract_compat.py
             python3 tools/merge_strict_runtime_resilience.py
             python3 tools/merge_strict_runtime_contract_compat.py
+            python3 tools/prepare_extreme_lock_reapply.py
             python3 tools/merge_extreme_lock_hardening.py
             python3 tools/merge_sdk27_lock_reliability.py
           } > merge-diagnostics.log 2>&1
@@ -113,6 +114,8 @@ jobs:
           grep -q 'launchLockActivityReliably' native/MainActivityV2.kt
           grep -q 'SDK27_RELIABLE_LOCK_MARKER' native/MainActivityV2.kt
           grep -q 'LOCK_ACTIVITY_STARTED' native/MainActivityV2.kt
+          grep -q 'dispatchKeyEvent(event: KeyEvent)' native/MainActivityV2.kt
+          grep -q 'verifyEnteredPin(source: String)' native/MainActivityV2.kt
           grep -q 'FLAG_ALT_FOCUSABLE_IM' native/MainActivityV2.kt
           grep -q 'systemGestureExclusionRects' native/MainActivityV2.kt
           grep -q 'LOCK_FAIL_OPEN' native/MainActivityV2.kt
