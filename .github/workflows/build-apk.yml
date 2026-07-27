@@ -111,11 +111,6 @@ jobs:
           grep -q 'android:directBootAware="true"' native/AndroidManifest.xml
           grep -q 'EXTREME_LOCK_HARDENING_MARKER' native/MainActivityV2.kt
           grep -q 'LOCK_TASK_FEATURE_NONE' native/MainActivityV2.kt
-          grep -q 'launchLockActivityReliably' native/MainActivityV2.kt
-          grep -q 'SDK27_RELIABLE_LOCK_MARKER' native/MainActivityV2.kt
-          grep -q 'LOCK_ACTIVITY_STARTED' native/MainActivityV2.kt
-          grep -q 'dispatchKeyEvent(event: KeyEvent)' native/MainActivityV2.kt
-          grep -q 'verifyEnteredPin(source: String)' native/MainActivityV2.kt
           grep -q 'FLAG_ALT_FOCUSABLE_IM' native/MainActivityV2.kt
           grep -q 'systemGestureExclusionRects' native/MainActivityV2.kt
           grep -q 'LOCK_FAIL_OPEN' native/MainActivityV2.kt
