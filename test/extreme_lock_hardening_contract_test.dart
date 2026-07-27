@@ -9,8 +9,8 @@ void main() {
 
     expect(native, contains('EXTREME_LOCK_HARDENING_MARKER'));
     expect(native, contains('LOCK_TASK_FEATURE_NONE'));
-    expect(native, contains('launchLockActivityIfDeviceOwner()'));
-    expect(native, contains('LOCK_ACTIVITY_REASSERTED'));
+    expect(native, contains('launchLockActivityReliably()'));
+    expect(native, contains('LOCK_ACTIVITY_STARTED'));
     expect(native, contains('FLAG_SECURE'));
     expect(native, contains('FLAG_ALT_FOCUSABLE_IM'));
     expect(native, contains('systemGestureExclusionRects'));
@@ -27,7 +27,8 @@ void main() {
     expect(native, contains('clearLockPinFailureState'));
 
     final dismissStart = native.indexOf('private fun dismissLockOverlay()');
-    final dismissEnd = native.indexOf('private fun monitorOverlayPermission()', dismissStart);
+    final dismissEnd =
+        native.indexOf('private fun monitorOverlayPermission()', dismissStart);
     final dismiss = native.substring(dismissStart, dismissEnd);
     expect(
       dismiss.indexOf('lockOverlayView = null'),
