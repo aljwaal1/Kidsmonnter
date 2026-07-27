@@ -4,16 +4,26 @@ path = Path("native/MainActivityV2.kt")
 source = path.read_text(encoding="utf-8")
 marker = "RUNTIME_DIAGNOSTICS_CONTRACT_COMPAT_MARKER"
 
-normalized = '''                    // RUNTIME_DIAGNOSTICS_CONTRACT_COMPAT_MARKER
+normalized = '''                // RUNTIME_DIAGNOSTICS_CONTRACT_COMPAT_MARKER
+                "getStatus" -> {
                     if (shouldRecoverProtectionService(prefs)) {
                         requestMonitorServiceStartIfAllowed(prefs).also {
                             appendGuardLog("STATUS_SELF_HEAL", "heartbeat=${prefs.getLong(HEARTBEAT_KEY, 0L)} requested=$it")
                         }
                     }
 '''
-one_line = '''                    // RUNTIME_DIAGNOSTICS_CONTRACT_COMPAT_MARKER
+one_line = '''                "getStatus" -> {
+                    // RUNTIME_DIAGNOSTICS_CONTRACT_COMPAT_MARKER
                     if (shouldRecoverProtectionService(prefs)) requestMonitorServiceStartIfAllowed(prefs).also {
                         appendGuardLog("STATUS_SELF_HEAL", "heartbeat=${prefs.getLong(HEARTBEAT_KEY, 0L)} requested=$it")
+                    }
+'''
+old_normalized = '''                "getStatus" -> {
+                    // RUNTIME_DIAGNOSTICS_CONTRACT_COMPAT_MARKER
+                    if (shouldRecoverProtectionService(prefs)) {
+                        requestMonitorServiceStartIfAllowed(prefs).also {
+                            appendGuardLog("STATUS_SELF_HEAL", "heartbeat=${prefs.getLong(HEARTBEAT_KEY, 0L)} requested=$it")
+                        }
                     }
 '''
 
@@ -22,11 +32,16 @@ if marker in source:
         source = source.replace(one_line, normalized, 1)
         path.write_text(source, encoding="utf-8")
         print("تم توحيد عقد getStatus للاستمرارية الصارمة")
+    elif old_normalized in source:
+        source = source.replace(old_normalized, normalized, 1)
+        path.write_text(source, encoding="utf-8")
+        print("تم تثبيت موضع علامة getStatus")
     else:
         print("توافق عقود سجل التشخيص مدمج مسبقاً")
     raise SystemExit(0)
 
-old_status = '''                    if (shouldRecoverProtectionService(prefs)) {
+old_status = '''                "getStatus" -> {
+                    if (shouldRecoverProtectionService(prefs)) {
                         appendGuardLog("STATUS_SELF_HEAL", "heartbeat=${prefs.getLong(HEARTBEAT_KEY, 0L)}")
                         requestMonitorServiceStartIfAllowed(prefs)
                     }
