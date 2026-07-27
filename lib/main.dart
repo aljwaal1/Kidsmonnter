@@ -85,6 +85,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Timer? _refreshTimer;
   bool _busy = false;
   String? _error;
+  bool _exactAlarmAllowed = false;
+  bool _batteryOptimizationIgnored = false;
 
   late final GuardDiagnosticsController _diagnosticsController =
       GuardDiagnosticsController(
@@ -129,6 +131,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       setState(() {
         _status = GuardStatus.fromMap(map, overlay);
         _devicePolicy = DevicePolicyStatus.fromMap(policyMap);
+        _exactAlarmAllowed = map['exactAlarmAllowed'] == true;
+        _batteryOptimizationIgnored = map['batteryOptimizationIgnored'] == true;
         _error = null;
       });
     } on PlatformException catch (error) {
@@ -565,6 +569,71 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  // STRICT_RUNTIME_UI_MARKER
+  Future<void> _openStrictSetting(String method) async {
+    try {
+      await _channel.invokeMethod<void>(method);
+    } on PlatformException catch (error) {
+      _showMessage(error.message ?? 'تعذر فتح إعداد النظام.');
+    }
+  }
+
+  Widget _buildStrictRuntimeCard() {
+    final ready = _exactAlarmAllowed && _batteryOptimizationIgnored;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(ready ? Icons.verified_user : Icons.warning_amber_rounded),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    ready
+                        ? 'استمرارية الخلفية مضبوطة'
+                        : 'يلزم تشديد تشغيل الخلفية',
+                    style: const TextStyle(
+                        fontSize: 17, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(_exactAlarmAllowed
+                ? 'مراقب الاستعادة الدقيق مفعّل.'
+                : 'فعّل المنبهات والتذكيرات حتى يستطيع المراقب إعادة الخدمة.'),
+            const SizedBox(height: 6),
+            Text(_batteryOptimizationIgnored
+                ? 'التطبيق مستثنى من تحسين البطارية.'
+                : 'استثنِ التطبيق من تحسين البطارية لمنع النظام من تجميده.'),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (!_exactAlarmAllowed)
+                  FilledButton.tonal(
+                    onPressed: () =>
+                        _openStrictSetting('openExactAlarmSettings'),
+                    child: const Text('تفعيل المنبه الدقيق'),
+                  ),
+                if (!_batteryOptimizationIgnored)
+                  FilledButton.tonal(
+                    onPressed: () =>
+                        _openStrictSetting('openBatteryOptimizationSettings'),
+                    child: const Text('استثناء البطارية'),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   int get _limitSeconds => (_status?.dailyMinutes ?? 60) * 60;
   int get _remainingSeconds =>
       (_limitSeconds - (_status?.usedSeconds ?? 0)).clamp(0, _limitSeconds);
@@ -690,6 +759,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ],
               ),
             ),
+            const SizedBox(height: 14),
+            _buildStrictRuntimeCard(),
             const SizedBox(height: 14),
             GuardDiagnosticsCard(
               diagnostics: status.diagnostics,

@@ -46,9 +46,42 @@ private const val LOCK_LAUNCH_COOLDOWN_MS = 5_000L
 private const val DIAGNOSTIC_LOG_FILE = "kidsmonnter-diagnostic.log"
 private const val MAX_DIAGNOSTIC_LOG_BYTES = 512 * 1024
 private const val DIAGNOSTIC_HEARTBEAT_INTERVAL_MS = 15_000L
+private const val BOOT_PREFS_NAME = "kidsmonnter_boot"
+private const val BOOT_ENABLED_KEY = "protection_enabled"
+private const val BOOT_RETRY_ACTION = "com.explapp.kidstimeguard.BOOT_RETRY"
+private const val BOOT_RETRY_REQUEST_BASE = 1200
+private const val WAKE_LOCK_TIMEOUT_MS = 12_000L
 
 private fun Context.guardPrefs(): SharedPreferences =
     getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+// STRICT_RUNTIME_RESILIENCE_MARKER
+private fun Context.bootPrefs(): SharedPreferences =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+        createDeviceProtectedStorageContext()
+            .getSharedPreferences(BOOT_PREFS_NAME, Context.MODE_PRIVATE)
+    } else {
+        getSharedPreferences(BOOT_PREFS_NAME, Context.MODE_PRIVATE)
+    }
+
+private fun Context.syncBootProtectionState(enabled: Boolean) {
+    bootPrefs().edit().putBoolean(BOOT_ENABLED_KEY, enabled).commit()
+}
+
+private fun Context.isProtectionEnabledForBoot(): Boolean {
+    if (bootPrefs().getBoolean(BOOT_ENABLED_KEY, false)) return true
+    val unlocked = Build.VERSION.SDK_INT < Build.VERSION_CODES.N ||
+        (getSystemService(Context.USER_SERVICE) as UserManager).isUserUnlocked
+    return unlocked && guardPrefs().getBoolean("enabled", false)
+}
+
+private fun Context.isIgnoringBatteryOptimizations(): Boolean =
+    (getSystemService(Context.POWER_SERVICE) as PowerManager)
+        .isIgnoringBatteryOptimizations(packageName)
+
+private fun Context.canUseExactWatchdog(): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+        (getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms()
 
 private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 private fun timestamp(): String = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
@@ -201,10 +234,49 @@ private fun Context.scheduleMonitorWatchdog(delayMs: Long = WATCHDOG_INTERVAL_MS
         Intent(this, BootReceiver::class.java).setAction(MONITOR_WATCHDOG_ACTION),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
-    (getSystemService(Context.ALARM_SERVICE) as AlarmManager).setAndAllowWhileIdle(
-        AlarmManager.ELAPSED_REALTIME_WAKEUP,
-        SystemClock.elapsedRealtime() + delayMs,
-        pending,
+    val alarm = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+    val triggerAt = SystemClock.elapsedRealtime() + delayMs
+    if (canUseExactWatchdog()) {
+        alarm.setExactAndAllowWhileIdle(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pending,
+        )
+        appendGuardLog("WATCHDOG_SCHEDULED", "mode=exact delayMs=$delayMs")
+    } else {
+        alarm.setAndAllowWhileIdle(
+            AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pending,
+        )
+        appendGuardLog(
+            "WATCHDOG_SCHEDULED",
+            "mode=inexact delayMs=$delayMs exactPermission=false",
+        )
+    }
+}
+
+private fun Context.scheduleBootRetries() {
+    val alarm = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+    listOf(15_000L, 60_000L, 5 * 60_000L).forEachIndexed { index, delay ->
+        val pending = PendingIntent.getBroadcast(
+            this,
+            BOOT_RETRY_REQUEST_BASE + index,
+            Intent(this, BootReceiver::class.java)
+                .setAction(BOOT_RETRY_ACTION)
+                .putExtra("retry_index", index),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val triggerAt = SystemClock.elapsedRealtime() + delay
+        if (canUseExactWatchdog()) {
+            alarm.setExactAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pending,
+            )
+        } else {
+            alarm.setAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAt, pending,
+            )
+        }
+    }
+    appendGuardLog(
+        "BOOT_RETRIES_SCHEDULED",
+        "delays=15s,60s,300s exact=${canUseExactWatchdog()}",
     )
 }
 
@@ -346,6 +418,7 @@ class MainActivity : FlutterActivity() {
                         .remove("unlocked_date")
                         .remove(LAST_TICK_KEY)
                         .commit()
+                    syncBootProtectionState(true)
                     appendGuardLog("PROTECTION_ENABLED", "minutes=$minutes used=${prefs.getInt("used_seconds", 0)}")
                     requestNotificationPermissionIfNeeded()
                     startMonitorServiceSafely()
@@ -367,6 +440,7 @@ class MainActivity : FlutterActivity() {
                         result.error("WRONG_PIN", "رمز ولي الأمر غير صحيح", null)
                     } else {
                         prefs.edit().putBoolean("enabled", false).remove(LAST_TICK_KEY).commit()
+                        syncBootProtectionState(false)
                         appendGuardLog("PROTECTION_DISABLED", "source=main_activity")
                         releaseDeviceOwnerPolicies()
                         stopService(Intent(this, MonitorService::class.java))
@@ -397,8 +471,33 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "getFailedAttempts" -> result.success(readFailedAttempts(prefs))
+                // RUNTIME_DIAGNOSTICS_CONTRACT_COMPAT_MARKER
+                "openExactAlarmSettings" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        startActivity(
+                            Intent(
+                                Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                Uri.parse("package:$packageName"),
+                            ),
+                        )
+                    }
+                    result.success(true)
+                }
+                "openBatteryOptimizationSettings" -> {
+                    try {
+                        startActivity(
+                            Intent(
+                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:$packageName"),
+                            ),
+                        )
+                    } catch (_: Exception) {
+                        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    }
+                    result.success(true)
+                }
+                // STRICT_RUNTIME_CONTRACT_COMPAT_MARKER
                 "getStatus" -> {
-                    // RUNTIME_DIAGNOSTICS_CONTRACT_COMPAT_MARKER
                     if (shouldRecoverProtectionService(prefs)) requestMonitorServiceStartIfAllowed(prefs).also {
                         appendGuardLog("STATUS_SELF_HEAL", "heartbeat=${prefs.getLong(HEARTBEAT_KEY, 0L)} requested=$it")
                     }
@@ -410,7 +509,9 @@ class MainActivity : FlutterActivity() {
                         "failedAttempts" to readFailedAttempts(prefs).size,
                         "parentEmail" to prefs.getString(PARENT_EMAIL_KEY, "").orEmpty(),
                         "overlayAllowed" to Settings.canDrawOverlays(this),
-                        "serviceHeartbeatMs" to prefs.getLong(HEARTBEAT_KEY, 0L)
+                        "serviceHeartbeatMs" to prefs.getLong(HEARTBEAT_KEY, 0L),
+                        "exactAlarmAllowed" to canUseExactWatchdog(),
+                        "batteryOptimizationIgnored" to isIgnoringBatteryOptimizations()
                     ))
                 }
                 "openOverlaySettings" -> {
@@ -518,8 +619,9 @@ class MonitorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        appendGuardLog("SERVICE_CREATED", "enabled=${prefs.getBoolean("enabled", false)}")
         createChannel(this, GUARD_CHANNEL_ID, "حماية وقت الهاتف", NotificationManager.IMPORTANCE_LOW)
+        startForeground(NOTIFICATION_ID, buildGuardNotification("الحماية تعمل الآن"))
+        appendGuardLog("SERVICE_CREATED", "enabled=${prefs.getBoolean("enabled", false)}")
         screenOn = (getSystemService(POWER_SERVICE) as PowerManager).isInteractive
         @Suppress("DEPRECATION")
         registerReceiver(screenReceiver, IntentFilter().apply {
@@ -528,7 +630,6 @@ class MonitorService : Service() {
             addAction(Intent.ACTION_USER_PRESENT)
         })
         resetClockAnchor()
-        startForeground(NOTIFICATION_ID, buildGuardNotification("الحماية تعمل الآن"))
         scheduleMonitorWatchdog()
         handler.post(ticker)
         appendGuardLog("SERVICE_FOREGROUND_READY", "screenOn=$screenOn")
@@ -555,12 +656,17 @@ class MonitorService : Service() {
 
     override fun onDestroy() {
         appendGuardLog("SERVICE_DESTROYED", "enabled=${prefs.getBoolean("enabled", false)}")
-        accountElapsedUsage()
-        dismissLockOverlay()
-        handler.removeCallbacks(ticker)
-        try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
-        if (prefs.getBoolean("enabled", false)) scheduleRestart()
-        super.onDestroy()
+        try {
+            accountElapsedUsage()
+            dismissLockOverlay()
+        } catch (error: Exception) {
+            appendGuardLog("SERVICE_DESTROY_CLEANUP_ERROR", error = error)
+        } finally {
+            handler.removeCallbacks(ticker)
+            try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
+            if (prefs.getBoolean("enabled", false)) scheduleRestart()
+            super.onDestroy()
+        }
     }
 
     private fun scheduleRestart() {
@@ -806,6 +912,7 @@ class MonitorService : Service() {
             lockOverlayStatus?.text = "تعذر إيقاف الحماية. حاول مرة أخرى."
             return
         }
+        syncBootProtectionState(false)
         releaseDeviceOwnerPolicies()
         dismissLockOverlay()
         stopSelf()
@@ -1041,6 +1148,7 @@ class LockActivity : Activity() {
             return
         }
 
+        syncBootProtectionState(false)
         releaseDeviceOwnerPolicies()
         stopService(Intent(this, MonitorService::class.java))
         exitLock()
@@ -1086,24 +1194,59 @@ class KidsMonnterDeviceAdminReceiver : DeviceAdminReceiver()
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        val prefs = context.guardPrefs()
-        val enabled = prefs.getBoolean("enabled", false)
-        context.appendGuardLog("BOOT_RECEIVER", "action=${intent?.action.orEmpty()} enabled=$enabled")
-        if (!enabled) return
-
-        val isWatchdog = intent?.action == MONITOR_WATCHDOG_ACTION
-        val heartbeatAge = System.currentTimeMillis() - prefs.getLong(HEARTBEAT_KEY, 0L)
-        val serviceNeedsRestart = !isWatchdog || heartbeatAge < 0L || heartbeatAge > STALE_HEARTBEAT_MS
-        context.appendGuardLog(
-            "WATCHDOG_DECISION",
-            "isWatchdog=$isWatchdog heartbeatAge=$heartbeatAge restart=$serviceNeedsRestart",
+        val action = intent?.action.orEmpty()
+        val pendingResult = goAsync()
+        val power = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wakeLock = power.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "KidsMonnter:boot-recovery",
         )
-
         try {
-            if (serviceNeedsRestart) context.requestMonitorServiceStartIfAllowed(prefs, force = !isWatchdog)
+            wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS)
+            val userUnlocked = Build.VERSION.SDK_INT < Build.VERSION_CODES.N ||
+                (context.getSystemService(Context.USER_SERVICE) as UserManager).isUserUnlocked
+            val enabled = context.isProtectionEnabledForBoot()
+            context.appendGuardLog(
+                "BOOT_RECEIVER",
+                "action=$action enabled=$enabled userUnlocked=$userUnlocked",
+            )
+            if (!enabled) return
+            if (!userUnlocked) {
+                context.scheduleBootRetries()
+                return
+            }
+
+            val prefs = context.guardPrefs()
+            context.syncBootProtectionState(prefs.getBoolean("enabled", enabled))
+            val isWatchdog = action == MONITOR_WATCHDOG_ACTION || action == BOOT_RETRY_ACTION
+            val heartbeatAge = System.currentTimeMillis() - prefs.getLong(HEARTBEAT_KEY, 0L)
+            val serviceNeedsRestart =
+                !isWatchdog || heartbeatAge < 0L || heartbeatAge > STALE_HEARTBEAT_MS
+            context.appendGuardLog(
+                "WATCHDOG_DECISION",
+                "action=$action isWatchdog=$isWatchdog heartbeatAge=$heartbeatAge " +
+                    "restart=$serviceNeedsRestart exact=${context.canUseExactWatchdog()}",
+            )
+
+            try {
+                if (serviceNeedsRestart) {
+                    context.requestMonitorServiceStartIfAllowed(prefs, force = !isWatchdog)
+                }
+            } catch (error: Exception) {
+                context.appendGuardLog("BOOT_SERVICE_START_FAILED", "action=$action", error)
+                context.scheduleBootRetries()
+            }
             context.scheduleMonitorWatchdog()
+            if (action == Intent.ACTION_BOOT_COMPLETED ||
+                action == Intent.ACTION_MY_PACKAGE_REPLACED
+            ) {
+                context.scheduleBootRetries()
+            }
         } catch (error: Exception) {
-            context.appendGuardLog("BOOT_RECEIVER_ERROR", error = error)
+            context.appendGuardLog("BOOT_RECEIVER_ERROR", "action=$action", error)
+        } finally {
+            if (wakeLock.isHeld) wakeLock.release()
+            pendingResult.finish()
         }
     }
 }
