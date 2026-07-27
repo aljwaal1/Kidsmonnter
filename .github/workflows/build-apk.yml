@@ -49,6 +49,8 @@ jobs:
             python3 tools/merge_safe_policy_release.py
             python3 tools/merge_runtime_diagnostics.py
             python3 tools/merge_runtime_diagnostics_contract_compat.py
+            python3 tools/merge_strict_runtime_resilience.py
+            python3 tools/merge_strict_runtime_contract_compat.py
           } > merge-diagnostics.log 2>&1
           status=$?
           cat merge-diagnostics.log
@@ -79,6 +81,7 @@ jobs:
           test -f test/lock_emergency_stop_contract_test.dart
           test -f test/safe_policy_release_contract_test.dart
           test -f test/runtime_diagnostics_contract_test.dart
+          test -f test/strict_runtime_resilience_contract_test.dart
           grep -q 'uninstallBlocked' lib/main.dart
           grep -q 'PendingIntent.getBroadcast' native/MainActivityV2.kt
           grep -q 'MONITOR_WATCHDOG_ACTION' native/MainActivityV2.kt
@@ -93,6 +96,14 @@ jobs:
           grep -q 'TICK_ERROR' native/MainActivityV2.kt
           grep -q 'RUNTIME_DIAGNOSTICS_UI_MARKER' lib/main.dart
           grep -q 'getDiagnosticLog' lib/main.dart
+          grep -q 'STRICT_RUNTIME_RESILIENCE_MARKER' native/MainActivityV2.kt
+          grep -q 'STRICT_RUNTIME_CONTRACT_COMPAT_MARKER' native/MainActivityV2.kt
+          grep -q 'setExactAndAllowWhileIdle' native/MainActivityV2.kt
+          grep -q 'createDeviceProtectedStorageContext' native/MainActivityV2.kt
+          grep -q 'scheduleBootRetries' native/MainActivityV2.kt
+          grep -q 'STRICT_RUNTIME_UI_MARKER' lib/main.dart
+          grep -q 'android.permission.SCHEDULE_EXACT_ALARM' native/AndroidManifest.xml
+          grep -q 'android:directBootAware="true"' native/AndroidManifest.xml
           grep -q 'GridLayout(this)' native/MainActivityV2.kt
           grep -q 'unlockWithPin(addTime = true)' native/MainActivityV2.kt
           grep -q 'unlockWithPin(addTime = false)' native/MainActivityV2.kt
@@ -182,6 +193,6 @@ jobs:
           printf '# تحميل التطبيق\n\n[تحميل KidsMonnter APK](./apk/KidsMonnter.apk)\n' > DOWNLOAD_APK.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add lib/main.dart native/MainActivityV2.kt apk/KidsMonnter.apk DOWNLOAD_APK.md
+          git add lib/main.dart native/MainActivityV2.kt native/AndroidManifest.xml apk/KidsMonnter.apk DOWNLOAD_APK.md
           git diff --cached --quiet || git commit -m "بناء نسخة KidsMonnter الآمنة وتحديث APK"
           git push origin HEAD:main
