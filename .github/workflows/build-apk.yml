@@ -52,6 +52,7 @@ jobs:
             python3 tools/merge_strict_runtime_resilience.py
             python3 tools/merge_strict_runtime_contract_compat.py
             python3 tools/merge_extreme_lock_hardening.py
+            python3 tools/merge_sdk27_lock_reliability.py
           } > merge-diagnostics.log 2>&1
           status=$?
           cat merge-diagnostics.log
@@ -84,6 +85,7 @@ jobs:
           test -f test/runtime_diagnostics_contract_test.dart
           test -f test/strict_runtime_resilience_contract_test.dart
           test -f test/extreme_lock_hardening_contract_test.dart
+          test -f test/sdk27_reliable_lock_contract_test.dart
           grep -q 'uninstallBlocked' lib/main.dart
           grep -q 'PendingIntent.getBroadcast' native/MainActivityV2.kt
           grep -q 'MONITOR_WATCHDOG_ACTION' native/MainActivityV2.kt
@@ -108,7 +110,9 @@ jobs:
           grep -q 'android:directBootAware="true"' native/AndroidManifest.xml
           grep -q 'EXTREME_LOCK_HARDENING_MARKER' native/MainActivityV2.kt
           grep -q 'LOCK_TASK_FEATURE_NONE' native/MainActivityV2.kt
-          grep -q 'launchLockActivityIfDeviceOwner' native/MainActivityV2.kt
+          grep -q 'launchLockActivityReliably' native/MainActivityV2.kt
+          grep -q 'SDK27_RELIABLE_LOCK_MARKER' native/MainActivityV2.kt
+          grep -q 'LOCK_ACTIVITY_STARTED' native/MainActivityV2.kt
           grep -q 'FLAG_ALT_FOCUSABLE_IM' native/MainActivityV2.kt
           grep -q 'systemGestureExclusionRects' native/MainActivityV2.kt
           grep -q 'LOCK_FAIL_OPEN' native/MainActivityV2.kt
