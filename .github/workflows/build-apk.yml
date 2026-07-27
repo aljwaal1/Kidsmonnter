@@ -51,6 +51,7 @@ jobs:
             python3 tools/merge_runtime_diagnostics_contract_compat.py
             python3 tools/merge_strict_runtime_resilience.py
             python3 tools/merge_strict_runtime_contract_compat.py
+            python3 tools/merge_extreme_lock_hardening.py
           } > merge-diagnostics.log 2>&1
           status=$?
           cat merge-diagnostics.log
@@ -82,6 +83,7 @@ jobs:
           test -f test/safe_policy_release_contract_test.dart
           test -f test/runtime_diagnostics_contract_test.dart
           test -f test/strict_runtime_resilience_contract_test.dart
+          test -f test/extreme_lock_hardening_contract_test.dart
           grep -q 'uninstallBlocked' lib/main.dart
           grep -q 'PendingIntent.getBroadcast' native/MainActivityV2.kt
           grep -q 'MONITOR_WATCHDOG_ACTION' native/MainActivityV2.kt
@@ -104,13 +106,18 @@ jobs:
           grep -q 'STRICT_RUNTIME_UI_MARKER' lib/main.dart
           grep -q 'android.permission.SCHEDULE_EXACT_ALARM' native/AndroidManifest.xml
           grep -q 'android:directBootAware="true"' native/AndroidManifest.xml
+          grep -q 'EXTREME_LOCK_HARDENING_MARKER' native/MainActivityV2.kt
+          grep -q 'LOCK_TASK_FEATURE_NONE' native/MainActivityV2.kt
+          grep -q 'launchLockActivityIfDeviceOwner' native/MainActivityV2.kt
+          grep -q 'FLAG_ALT_FOCUSABLE_IM' native/MainActivityV2.kt
+          grep -q 'systemGestureExclusionRects' native/MainActivityV2.kt
+          grep -q 'LOCK_FAIL_OPEN' native/MainActivityV2.kt
           grep -q 'GridLayout(this)' native/MainActivityV2.kt
           grep -q 'unlockWithPin(addTime = true)' native/MainActivityV2.kt
           grep -q 'unlockWithPin(addTime = false)' native/MainActivityV2.kt
           grep -q 'disableProtectionWithPin()' native/MainActivityV2.kt
           grep -q 'releaseDeviceOwnerPolicies()' native/MainActivityV2.kt
           grep -q 'text = "إيقاف الحماية"' native/MainActivityV2.kt
-          ! sed -n '/class MonitorService/,/class LockActivity/p' native/MainActivityV2.kt | grep -q 'startActivity(Intent(this, LockActivity::class.java)'
           ! sed -n '/class LockActivity/,/class KidsMonnterDeviceAdminReceiver/p' native/MainActivityV2.kt | grep -q 'EditText(this)'
           ! sed -n '/class LockActivity/,/class KidsMonnterDeviceAdminReceiver/p' native/MainActivityV2.kt | grep -q 'FLAG_TURN_SCREEN_ON'
           ! grep -q 'PendingIntent.getService' native/MainActivityV2.kt
