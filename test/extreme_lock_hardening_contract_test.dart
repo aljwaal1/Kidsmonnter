@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('يبني قفلاً مزدوجاً مع صمام أمان ومنع تجاوزات النظام', () {
+  test('يبني قفلاً مزدوجاً مع صمام أمان ومسار Android 8.1 موثوق', () {
     final native = File('native/MainActivityV2.kt').readAsStringSync();
     final manifest = File('native/AndroidManifest.xml').readAsStringSync();
 
@@ -14,10 +14,8 @@ void main() {
     expect(native, contains('FLAG_SECURE'));
     expect(native, contains('FLAG_ALT_FOCUSABLE_IM'));
     expect(native, contains('systemGestureExclusionRects'));
-    expect(native, contains('dispatchKeyEvent(event: KeyEvent)'));
-    expect(native, contains('onWindowFocusChanged(hasFocus: Boolean)'));
-    expect(native, contains('onUserLeaveHint()'));
-    expect(native, contains('scheduleLockReassert()'));
+    expect(native, contains('onBackPressed() = Unit'));
+    expect(native, contains('shouldRemainLocked() && isScreenInteractive()'));
     expect(native, contains('LOCK_ACTION_GRACE_MS'));
     expect(native, contains('lockActionInProgress'));
     expect(native, contains('PIN_FAILURE_STREAK_KEY'));
