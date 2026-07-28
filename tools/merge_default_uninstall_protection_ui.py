@@ -2,6 +2,12 @@ from pathlib import Path
 
 FLUTTER = Path("lib/main.dart")
 MARKER = "DEFAULT_UNINSTALL_PROTECTION_UI_MARKER"
+DAILY_REPORTS_TOOL = Path("tools/merge_daily_failed_attempt_reports.py")
+
+
+def run_daily_reports_merge() -> None:
+    namespace = {"__name__": "__main__", "__file__": str(DAILY_REPORTS_TOOL)}
+    exec(compile(DAILY_REPORTS_TOOL.read_text(encoding="utf-8"), str(DAILY_REPORTS_TOOL), "exec"), namespace)
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -15,6 +21,7 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 flutter = FLUTTER.read_text(encoding="utf-8")
 if MARKER in flutter:
     print("Default uninstall protection UI already merged")
+    run_daily_reports_merge()
     raise SystemExit(0)
 
 old_entry = '''            _buildUninstallProtectionCard(status),
@@ -73,3 +80,4 @@ flutter = flutter[:method_start] + flutter[class_end:]
 
 FLUTTER.write_text(flutter, encoding="utf-8")
 print("Default uninstall protection UI merged")
+run_daily_reports_merge()
