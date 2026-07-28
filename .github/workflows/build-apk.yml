@@ -54,6 +54,7 @@ jobs:
             python3 tools/prepare_extreme_lock_reapply.py
             python3 tools/merge_extreme_lock_hardening.py
             python3 tools/merge_sdk27_lock_reliability.py
+            python3 tools/merge_parent_pin_uninstall_protection.py
           } > merge-diagnostics.log 2>&1
           status=$?
           cat merge-diagnostics.log
@@ -87,6 +88,7 @@ jobs:
           test -f test/strict_runtime_resilience_contract_test.dart
           test -f test/extreme_lock_hardening_contract_test.dart
           test -f test/sdk27_reliable_lock_contract_test.dart
+          test -f test/parent_pin_uninstall_protection_contract_test.dart
           grep -q 'uninstallBlocked' lib/main.dart
           grep -q 'PendingIntent.getBroadcast' native/MainActivityV2.kt
           grep -q 'MONITOR_WATCHDOG_ACTION' native/MainActivityV2.kt
@@ -114,6 +116,9 @@ jobs:
           grep -q 'FLAG_ALT_FOCUSABLE_IM' native/MainActivityV2.kt
           grep -q 'systemGestureExclusionRects' native/MainActivityV2.kt
           grep -q 'LOCK_FAIL_OPEN' native/MainActivityV2.kt
+          grep -q 'PARENT_PIN_UNINSTALL_PROTECTION_MARKER' native/MainActivityV2.kt
+          grep -q 'PARENT_PIN_UNINSTALL_UI_MARKER' lib/main.dart
+          grep -q 'authorizeUninstall' native/MainActivityV2.kt
           grep -q 'GridLayout(this)' native/MainActivityV2.kt
           grep -q 'unlockWithPin(addTime = true)' native/MainActivityV2.kt
           grep -q 'unlockWithPin(addTime = false)' native/MainActivityV2.kt
