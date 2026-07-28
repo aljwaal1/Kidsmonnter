@@ -513,6 +513,56 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
+  // PARENT_PIN_UNINSTALL_UI_MARKER
+  Future<void> _authorizeUninstall() async {
+    if (!_devicePolicy.deviceOwner) {
+      await _showDeviceOwnerInstructions();
+      return;
+    }
+
+    final pin = await _askPin(title: 'أدخل رمز الأب للسماح بالحذف');
+    if (pin == null || !mounted) return;
+
+    final confirmed = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => AlertDialog(
+            icon: const Icon(Icons.delete_forever_outlined),
+            title: const Text('السماح بحذف التطبيق؟'),
+            content: const Text(
+              'سيتم إلغاء وضع Device Owner وفتح شاشة حذف Android. '
+              'إذا ألغيت الحذف بعد ذلك فلن تعود الحماية الكاملة إلا بتفعيل Device Owner من الكمبيوتر مرة أخرى.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('رجوع'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(dialogContext).colorScheme.error,
+                  foregroundColor: Theme.of(dialogContext).colorScheme.onError,
+                ),
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('السماح بالحذف'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+
+    await _runBusy(() async {
+      try {
+        await _channel.invokeMethod<void>('authorizeUninstall', {'pin': pin});
+        _showMessage('تم قبول رمز الأب. أكمل الحذف من شاشة Android.');
+      } on PlatformException catch (error) {
+        await _refreshStatus(silent: true);
+        _showMessage(error.message ?? 'تعذر السماح بحذف التطبيق.');
+      }
+    });
+  }
+
   Future<void> _configureDeviceOwnerPolicies() async {
     if (!_devicePolicy.deviceOwner) {
       await _showDeviceOwnerInstructions();
@@ -970,7 +1020,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             const SizedBox(height: 8),
             Text(
               active
-                  ? 'التطبيق مضبوط كـ Device Owner ويمكن للنظام منع حذفه وتفعيل القفل المحكم.'
+                  ? 'لا يمكن حذف التطبيق من إعدادات Android. للسماح بالحذف يجب فتح التطبيق وإدخال رمز الأب.'
                   : 'التطبيق العادي لا يستطيع منع حذفه. يلزم إعداد Device Owner مرة واحدة عبر الكمبيوتر.',
             ),
             const SizedBox(height: 12),
@@ -983,6 +1033,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   icon: Icon(active ? Icons.security : Icons.info_outline),
                   label: Text(active ? 'تطبيق السياسات' : 'طريقة التفعيل'),
                 ),
+                if (active)
+                  OutlinedButton.icon(
+                    onPressed: _busy ? null : _authorizeUninstall,
+                    icon: const Icon(Icons.delete_forever_outlined),
+                    label: const Text('حذف التطبيق برمز الأب'),
+                  ),
                 if (_devicePolicy.adminActive)
                   const Chip(
                     avatar: Icon(Icons.admin_panel_settings, size: 18),

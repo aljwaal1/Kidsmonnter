@@ -346,6 +346,20 @@ private fun Context.scheduleBootRetries() {
 private fun Context.deviceAdminComponent() =
     ComponentName(this, KidsMonnterDeviceAdminReceiver::class.java)
 
+// PARENT_PIN_UNINSTALL_PROTECTION_MARKER
+private fun Context.ensureUninstallProtection(): Boolean {
+    val manager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+    if (!manager.isDeviceOwnerApp(packageName)) return false
+    return try {
+        manager.setUninstallBlocked(deviceAdminComponent(), packageName, true)
+        appendGuardLog("UNINSTALL_PROTECTION_ENFORCED", "deviceOwner=true")
+        true
+    } catch (error: SecurityException) {
+        appendGuardLog("UNINSTALL_PROTECTION_ENFORCE_FAILED", error = error)
+        false
+    }
+}
+
 private fun Context.configureDeviceOwnerPolicies(): Boolean {
     val manager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     if (!manager.isDeviceOwnerApp(packageName)) return false
@@ -375,10 +389,55 @@ private fun Context.releaseDeviceOwnerPolicies() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             manager.setStatusBarDisabled(admin, false)
         }
-        manager.setUninstallBlocked(admin, packageName, false)
         manager.setLockTaskPackages(admin, emptyArray<String>())
-    } catch (_: SecurityException) {
-        // The service is still stopped even if a vendor rejects one policy reset.
+        // إيقاف حماية الوقت لا يسمح بحذف التطبيق. يبقى الحذف محمياً برمز الأب.
+        manager.setUninstallBlocked(admin, packageName, true)
+        appendGuardLog("RUNTIME_POLICIES_RELEASED_UNINSTALL_STILL_BLOCKED")
+    } catch (error: SecurityException) {
+        appendGuardLog("RUNTIME_POLICY_RELEASE_FAILED", error = error)
+    }
+}
+
+private fun Activity.openSelfUninstallScreen() {
+    startActivity(
+        Intent(Intent.ACTION_DELETE, Uri.parse("package:$packageName")).addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP,
+        ),
+    )
+    appendGuardLog("SYSTEM_UNINSTALL_SCREEN_OPENED")
+}
+
+private fun Activity.prepareParentAuthorizedUninstall(prefs: SharedPreferences): Boolean {
+    val manager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+    val admin = deviceAdminComponent()
+    if (!manager.isDeviceOwnerApp(packageName)) {
+        appendGuardLog("UNINSTALL_AUTHORIZATION_REJECTED", "reason=device_owner_required")
+        return false
+    }
+
+    return try {
+        prefs.edit()
+            .putBoolean("enabled", false)
+            .remove(LAST_TICK_KEY)
+            .remove("unlocked_date")
+            .commit()
+        syncBootProtectionState(false)
+        stopService(Intent(this, MonitorService::class.java))
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            manager.setStatusBarDisabled(admin, false)
+        }
+        manager.setLockTaskPackages(admin, emptyArray<String>())
+        manager.setUninstallBlocked(admin, packageName, false)
+        appendGuardLog("UNINSTALL_AUTHORIZED_BY_PARENT_PIN", "deviceOwner=true")
+
+        @Suppress("DEPRECATION")
+        manager.clearDeviceOwnerApp(packageName)
+        appendGuardLog("DEVICE_OWNER_CLEARED_FOR_UNINSTALL")
+        true
+    } catch (error: Exception) {
+        appendGuardLog("UNINSTALL_AUTHORIZATION_FAILED", error = error)
+        false
     }
 }
 
@@ -428,6 +487,7 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         appendGuardLog("APP_ENGINE_READY", "activity=${javaClass.simpleName}")
+        ensureUninstallProtection()
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName).setMethodCallHandler { call, result ->
             val prefs = guardPrefs()
             when (call.method) {
@@ -490,6 +550,7 @@ class MainActivity : FlutterActivity() {
                         .remove(LAST_TICK_KEY)
                         .commit()
                     syncBootProtectionState(true)
+                    ensureUninstallProtection()
                     appendGuardLog("PROTECTION_ENABLED", "minutes=$minutes used=${prefs.getInt("used_seconds", 0)}")
                     requestNotificationPermissionIfNeeded()
                     startMonitorServiceSafely()
@@ -590,10 +651,43 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "canDrawOverlays" -> result.success(Settings.canDrawOverlays(this))
+                "authorizeUninstall" -> {
+                    val pin = call.argument<String>("pin").orEmpty()
+                    if (!verifyPin(prefs, pin)) {
+                        recordFailedAttempt(this, prefs, "محاولة السماح بحذف التطبيق")
+                        appendGuardLog("UNINSTALL_PIN_REJECTED")
+                        result.error("WRONG_PIN", "رمز ولي الأمر غير صحيح", null)
+                    } else {
+                        val manager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                        if (!manager.isDeviceOwnerApp(packageName)) {
+                            result.error(
+                                "DEVICE_OWNER_REQUIRED",
+                                "منع الحذف الكامل يحتاج تفعيل Device Owner أولاً",
+                                null,
+                            )
+                        } else if (!prepareParentAuthorizedUninstall(prefs)) {
+                            result.error(
+                                "UNINSTALL_PREPARE_FAILED",
+                                "تعذر إلغاء حماية الحذف بصورة آمنة",
+                                null,
+                            )
+                        } else {
+                            result.success(true)
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                try {
+                                    openSelfUninstallScreen()
+                                } catch (error: Exception) {
+                                    appendGuardLog("SYSTEM_UNINSTALL_SCREEN_FAILED", error = error)
+                                }
+                            }, 350L)
+                        }
+                    }
+                }
                 "getDevicePolicyStatus" -> {
                     val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
                     val admin = deviceAdminComponent()
                     val deviceOwner = dpm.isDeviceOwnerApp(packageName)
+                    if (deviceOwner) ensureUninstallProtection()
                     val uninstallBlocked = if (deviceOwner) {
                         try {
                             dpm.isUninstallBlocked(admin, packageName)
