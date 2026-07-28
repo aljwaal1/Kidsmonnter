@@ -377,48 +377,70 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  // DAILY_FAILED_ATTEMPT_REPORTS_MARKER
   Future<void> _showFailedAttempts() async {
     final raw = await _channel.invokeListMethod<dynamic>('getFailedAttempts') ??
         const [];
     if (!mounted) return;
-    final attempts = raw.whereType<Map>().toList();
+
+    final attempts = raw.whereType<Map>().map((item) {
+      final time = item['time']?.toString() ?? '';
+      final date = item['date']?.toString() ??
+          (time.contains(' ') ? time.split(' ').first : 'غير معروف');
+      final clock = item['clock']?.toString() ??
+          (time.contains(' ') ? time.substring(time.indexOf(' ') + 1) : time);
+      return <String, String>{
+        'date': date,
+        'clock': clock,
+        'source': item['source']?.toString() ?? '',
+      };
+    }).toList();
+
+    final grouped = <String, List<Map<String, String>>>{};
+    for (final attempt in attempts) {
+      grouped.putIfAbsent(attempt['date']!, () => []).add(attempt);
+    }
 
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('المحاولات الفاشلة'),
+        title: const Text('التقارير اليومية للمحاولات الخاطئة'),
         content: SizedBox(
           width: double.maxFinite,
-          child: attempts.isEmpty
-              ? const Text('لا توجد محاولات مسجلة.')
-              : ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: attempts.length,
-                  itemBuilder: (_, index) => ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.warning_amber_rounded),
-                    title: Text(attempts[index]['source']?.toString() ?? ''),
-                    subtitle: Text(
-                      attempts[index]['time']?.toString() ?? '',
-                      textDirection: TextDirection.ltr,
-                    ),
-                  ),
+          height: 480,
+          child: grouped.isEmpty
+              ? const Center(child: Text('لا توجد محاولات خاطئة مسجلة.'))
+              : ListView(
+                  children: grouped.entries.map((entry) {
+                    final dayAttempts = entry.value;
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 10),
+                      child: ExpansionTile(
+                        initiallyExpanded: entry.key == grouped.keys.first,
+                        leading: const Icon(Icons.calendar_month_outlined),
+                        title:
+                            Text(entry.key, textDirection: TextDirection.ltr),
+                        subtitle: Text('${dayAttempts.length} محاولة خاطئة'),
+                        children: dayAttempts
+                            .map(
+                              (attempt) => ListTile(
+                                dense: true,
+                                leading:
+                                    const Icon(Icons.warning_amber_rounded),
+                                title: Text(attempt['source'] ?? ''),
+                                subtitle: Text(
+                                  attempt['clock'] ?? '',
+                                  textDirection: TextDirection.ltr,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    );
+                  }).toList(),
                 ),
         ),
         actions: [
-          if (attempts.isNotEmpty)
-            TextButton.icon(
-              onPressed: () async {
-                Navigator.pop(dialogContext);
-                try {
-                  await _channel.invokeMethod('sendSecurityReport');
-                } on PlatformException catch (error) {
-                  _showMessage(error.message ?? 'تعذر إرسال التقرير.');
-                }
-              },
-              icon: const Icon(Icons.email_outlined),
-              label: const Text('إرسال التقرير'),
-            ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext),
             child: const Text('إغلاق'),
@@ -949,8 +971,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   label: Text('${status.failedAttempts}'),
                   child: const Icon(Icons.gpp_maybe_outlined),
                 ),
-                title: const Text('المحاولات الفاشلة'),
-                subtitle: Text('عدد المحاولات: ${status.failedAttempts}'),
+                title: const Text('تقارير المحاولات الخاطئة'),
+                subtitle:
+                    Text('محفوظة يوميًا — المجموع: ${status.failedAttempts}'),
                 onTap: _showFailedAttempts,
               ),
             ),

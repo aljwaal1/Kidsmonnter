@@ -45,7 +45,8 @@ private const val WATCHDOG_INTERVAL_MS = 60_000L
 private const val STALE_HEARTBEAT_MS = 30_000L
 private const val LAST_SERVICE_START_REQUEST_ELAPSED_KEY = "last_service_start_request_elapsed_ms"
 private const val SERVICE_START_REQUEST_COOLDOWN_MS = 15_000L
-private const val MAX_FAILED_ATTEMPTS = 50
+private const val MAX_FAILED_ATTEMPTS = 1000
+// DAILY_FAILED_ATTEMPT_REPORTS_MARKER: الاحتفاظ بسجل يومي موسع داخل الجهاز
 private const val LOCK_LAUNCH_COOLDOWN_MS = 5_000L
 private const val DIAGNOSTIC_LOG_FILE = "kidsmonnter-diagnostic.log"
 private const val MAX_DIAGNOSTIC_LOG_BYTES = 512 * 1024
@@ -447,7 +448,16 @@ private fun readFailedAttempts(prefs: SharedPreferences): List<Map<String, Strin
         .filter { it.isNotBlank() }
         .mapNotNull { line ->
             val parts = line.split("|", limit = 2)
-            if (parts.size == 2) mapOf("time" to parts[0], "source" to parts[1]) else null
+            if (parts.size != 2) return@mapNotNull null
+            val timestamp = parts[0]
+            val date = timestamp.substringBefore(' ', timestamp)
+            val clock = timestamp.substringAfter(' ', timestamp)
+            mapOf(
+                "time" to timestamp,
+                "date" to date,
+                "clock" to clock,
+                "source" to parts[1],
+            )
         }
         .toList()
         .asReversed()
