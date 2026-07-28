@@ -867,8 +867,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               }).toList(),
             ),
             const SizedBox(height: 18),
-            _buildUninstallProtectionCard(status),
-            const SizedBox(height: 10),
+            // DEFAULT_UNINSTALL_PROTECTION_UI_MARKER
+            const Divider(height: 24),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                _devicePolicy.uninstallProtectionActive
+                    ? Icons.verified_user
+                    : Icons.info_outline,
+                color: _devicePolicy.uninstallProtectionActive
+                    ? Colors.green
+                    : Colors.orange,
+              ),
+              title: Text(
+                _devicePolicy.uninstallProtectionActive
+                    ? 'منع حذف التطبيق يعمل تلقائيًا'
+                    : 'منع الحذف يحتاج إعداد الجهاز مرة واحدة',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              subtitle: Text(
+                _devicePolicy.uninstallProtectionActive
+                    ? 'لا يوجد زر تشغيل. لا يمكن حذف التطبيق إلا من هنا وبعد رمز الأب.'
+                    : 'اضغط لمعرفة خطوة Device Owner؛ بعدها يصبح منع الحذف افتراضيًا دائمًا.',
+              ),
+              trailing: _devicePolicy.uninstallProtectionActive
+                  ? TextButton.icon(
+                      onPressed: _busy ? null : _authorizeUninstall,
+                      icon: const Icon(Icons.delete_outline),
+                      label: const Text('حذف'),
+                    )
+                  : const Icon(Icons.chevron_left),
+              onTap: _busy || _devicePolicy.uninstallProtectionActive
+                  ? null
+                  : _showDeviceOwnerInstructions,
+            ),
+            const Divider(height: 24),
             Card(
               child: ListTile(
                 leading: Icon(status.hasPin ? Icons.lock : Icons.lock_open),
@@ -983,74 +1016,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ),
             const SizedBox(height: 24),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildUninstallProtectionCard(GuardStatus status) {
-    final active = _devicePolicy.uninstallProtectionActive;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  active ? Icons.phonelink_lock : Icons.mobile_off_outlined,
-                  color: active ? Colors.green : Colors.orange,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    active
-                        ? 'الحماية ضد الحذف فعّالة'
-                        : 'الحماية ضد الحذف غير فعّالة',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 17,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              active
-                  ? 'لا يمكن حذف التطبيق من إعدادات Android. للسماح بالحذف يجب فتح التطبيق وإدخال رمز الأب.'
-                  : 'التطبيق العادي لا يستطيع منع حذفه. يلزم إعداد Device Owner مرة واحدة عبر الكمبيوتر.',
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                FilledButton.tonalIcon(
-                  onPressed: _busy ? null : _configureDeviceOwnerPolicies,
-                  icon: Icon(active ? Icons.security : Icons.info_outline),
-                  label: Text(active ? 'تطبيق السياسات' : 'طريقة التفعيل'),
-                ),
-                if (active)
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : _authorizeUninstall,
-                    icon: const Icon(Icons.delete_forever_outlined),
-                    label: const Text('حذف التطبيق برمز الأب'),
-                  ),
-                if (_devicePolicy.adminActive)
-                  const Chip(
-                    avatar: Icon(Icons.admin_panel_settings, size: 18),
-                    label: Text('مسؤول الجهاز مفعّل'),
-                  ),
-                if (_devicePolicy.lockTaskPermitted)
-                  const Chip(
-                    avatar: Icon(Icons.lock_person, size: 18),
-                    label: Text('وضع القفل مسموح'),
-                  ),
-              ],
-            ),
           ],
         ),
       ),
