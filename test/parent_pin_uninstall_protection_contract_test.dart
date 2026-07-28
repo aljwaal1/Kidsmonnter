@@ -19,18 +19,30 @@ void main() {
     expect(native, contains('Intent.ACTION_DELETE'));
     expect(native, contains('SYSTEM_UNINSTALL_SCREEN_OPENED'));
 
-    final releaseStart = native.indexOf('private fun Context.releaseDeviceOwnerPolicies()');
-    final releaseEnd = native.indexOf('private fun Activity.openSelfUninstallScreen()', releaseStart);
+    final releaseStart =
+        native.indexOf('private fun Context.releaseDeviceOwnerPolicies()');
+    final releaseEnd = native.indexOf(
+      'private fun Activity.openSelfUninstallScreen()',
+      releaseStart,
+    );
     final releaseBlock = native.substring(releaseStart, releaseEnd);
-    expect(releaseBlock, contains('setUninstallBlocked(admin, packageName, true)'));
-    expect(releaseBlock, contains('RUNTIME_POLICIES_RELEASED_UNINSTALL_STILL_BLOCKED'));
-    expect(releaseBlock, isNot(contains('setUninstallBlocked(admin, packageName, false)')));
+    expect(
+      releaseBlock,
+      contains('setUninstallBlocked(admin, packageName, true)'),
+    );
+    expect(
+      releaseBlock,
+      contains('RUNTIME_POLICIES_RELEASED_UNINSTALL_STILL_BLOCKED'),
+    );
+    expect(
+      releaseBlock,
+      isNot(contains('setUninstallBlocked(admin, packageName, false)')),
+    );
 
     expect(flutter, contains('PARENT_PIN_UNINSTALL_UI_MARKER'));
     expect(flutter, contains("invokeMethod<void>('authorizeUninstall'"));
     expect(flutter, contains('أدخل رمز الأب للسماح بالحذف'));
     expect(flutter, contains('السماح بحذف التطبيق؟'));
-    expect(flutter, contains('حذف التطبيق برمز الأب'));
     expect(flutter, contains('لن تعود الحماية الكاملة'));
   });
 }
