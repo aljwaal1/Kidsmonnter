@@ -8,7 +8,11 @@ MANDATORY_SETUP_TOOL = Path("tools/merge_mandatory_runtime_setup.py")
 
 def run_merge_tool(path: Path) -> None:
     namespace = {"__name__": "__main__", "__file__": str(path)}
-    exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), namespace)
+    try:
+        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), namespace)
+    except SystemExit as error:
+        if error.code not in (None, 0):
+            raise
 
 
 def run_followup_merges() -> None:
