@@ -4,6 +4,7 @@ FLUTTER = Path("lib/main.dart")
 MARKER = "DEFAULT_UNINSTALL_PROTECTION_UI_MARKER"
 DAILY_REPORTS_TOOL = Path("tools/merge_daily_failed_attempt_reports.py")
 MANDATORY_SETUP_TOOL = Path("tools/merge_mandatory_runtime_setup.py")
+MANDATORY_DEVICE_OWNER_TOOL = Path("tools/merge_mandatory_device_owner_setup.py")
 
 
 def run_merge_tool(path: Path) -> None:
@@ -18,6 +19,7 @@ def run_merge_tool(path: Path) -> None:
 def run_followup_merges() -> None:
     run_merge_tool(DAILY_REPORTS_TOOL)
     run_merge_tool(MANDATORY_SETUP_TOOL)
+    run_merge_tool(MANDATORY_DEVICE_OWNER_TOOL)
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
