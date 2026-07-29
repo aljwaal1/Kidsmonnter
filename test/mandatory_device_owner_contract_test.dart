@@ -16,7 +16,7 @@ void main() {
     expect(native, contains('MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER'));
     expect(native, contains('DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN'));
     expect(native, contains('dpm.isAdminActive(admin)'));
-    expect(native, contains('device_admin_required'));
+    expect(native, contains('missing.add("device_admin")'));
     expect(native, isNot(contains('device_owner_uninstall_block')));
   });
 }
