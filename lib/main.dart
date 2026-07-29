@@ -256,10 +256,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   // MANDATORY_RUNTIME_SETUP_MARKER
+  // MANDATORY_DEVICE_OWNER_SETUP_MARKER
   bool get _runtimeSetupReady =>
       (_status?.overlayAllowed == true) &&
       _exactAlarmAllowed &&
-      _batteryOptimizationIgnored;
+      _batteryOptimizationIgnored &&
+      _devicePolicy.uninstallProtectionActive;
 
   Future<void> _openRequiredSetting(String method) async {
     try {
@@ -332,6 +334,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 18),
+            item(
+              ready: _devicePolicy.uninstallProtectionActive,
+              title: 'منع حذف التطبيق',
+              subtitle: _devicePolicy.uninstallProtectionActive
+                  ? 'تم تفعيل Device Owner ومنع الحذف من إعدادات Android.'
+                  : 'هذه أهم خطوة. بدونها يمكن حذف التطبيق وإلغاء الحماية بالكامل.',
+              action: _showDeviceOwnerInstructions,
+              button: 'إعداد منع الحذف',
+            ),
+            if (!_devicePolicy.uninstallProtectionActive) ...[
+              const SizedBox(height: 8),
+              const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(14),
+                  child: Text(
+                    'لا يمكن تفعيل Device Owner من داخل التطبيق بعد إعداد الهاتف. يلزم جهاز جديد أو إعادة ضبط المصنع، ثم تثبيت التطبيق وتنفيذ أمر ADB قبل إضافة حساب Google أو إنشاء مستخدمين.',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 10),
             item(
               ready: status.overlayAllowed,
               title: 'الظهور فوق التطبيقات',

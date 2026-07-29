@@ -552,7 +552,14 @@ class MainActivity : FlutterActivity() {
                 }
                 // MANDATORY_RUNTIME_SETUP_MARKER
                 "startProtection" -> {
+                    // MANDATORY_DEVICE_OWNER_SETUP_MARKER
                     val missing = mutableListOf<String>()
+                    val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                    val admin = ComponentName(this, KidsMonnterDeviceAdminReceiver::class.java)
+                    val deviceOwnerReady = dpm.isDeviceOwnerApp(packageName) &&
+                        dpm.isAdminActive(admin) &&
+                        dpm.isUninstallBlocked(admin, packageName)
+                    if (!deviceOwnerReady) missing.add("device_owner_uninstall_block")
                     if (!Settings.canDrawOverlays(this)) missing.add("overlay")
                     if (!isIgnoringBatteryOptimizations()) missing.add("battery")
                     if (!canUseExactWatchdog()) missing.add("exact_alarm")
