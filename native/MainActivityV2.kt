@@ -550,7 +550,20 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
+                // MANDATORY_RUNTIME_SETUP_MARKER
                 "startProtection" -> {
+                    val missing = mutableListOf<String>()
+                    if (!Settings.canDrawOverlays(this)) missing.add("overlay")
+                    if (!isIgnoringBatteryOptimizations()) missing.add("battery")
+                    if (!canUseExactWatchdog()) missing.add("exact_alarm")
+                    if (missing.isNotEmpty()) {
+                        appendGuardLog("PROTECTION_START_BLOCKED", "missing=${missing.joinToString(",")}")
+                        result.error(
+                            "MISSING_RUNTIME_REQUIREMENTS",
+                            "يجب تفعيل صلاحيات الحماية الإلزامية أولًا: ${missing.joinToString(", ")}",
+                            missing,
+                        )
+                    } else {
                     val minutes = (call.argument<Int>("minutes") ?: 60).coerceIn(1, 1440)
                     prefs.edit()
                         .putInt("daily_minutes", minutes)
@@ -565,6 +578,7 @@ class MainActivity : FlutterActivity() {
                     requestNotificationPermissionIfNeeded()
                     startMonitorServiceSafely()
                     result.success(true)
+                    }
                 }
                 "restartProtectionService" -> {
                     if (!prefs.getBoolean("enabled", false)) {
