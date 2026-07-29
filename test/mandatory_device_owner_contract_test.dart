@@ -11,7 +11,10 @@ void main() {
     expect(flutter, contains('_devicePolicy.adminActive'));
     expect(flutter, contains('تفعيل مسؤول الجهاز'));
     expect(flutter, contains('activateDeviceAdministrator'));
-    expect(flutter, isNot(contains('إعادة ضبط المصنع')));
+    expect(
+      flutter,
+      contains('لا يحتاج كمبيوترًا أو إعادة ضبط المصنع'),
+    );
 
     expect(native, contains('MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER'));
     expect(native, contains('DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN'));
