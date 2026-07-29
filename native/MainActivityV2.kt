@@ -550,16 +550,32 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
+                "activateDeviceAdministrator" -> {
+                    val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+                    val admin = ComponentName(this, KidsMonnterDeviceAdminReceiver::class.java)
+                    if (dpm.isAdminActive(admin)) {
+                        result.success(true)
+                    } else {
+                        startActivity(
+                            Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                                putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, admin)
+                                putExtra(
+                                    DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                                    "يلزم تفعيل مسؤول الجهاز حتى لا يمكن إيقاف حماية وقت الهاتف بسهولة.",
+                                )
+                            },
+                        )
+                        result.success(true)
+                    }
+                }
                 // MANDATORY_RUNTIME_SETUP_MARKER
                 "startProtection" -> {
                     // MANDATORY_DEVICE_OWNER_SETUP_MARKER
                     val missing = mutableListOf<String>()
+                    // MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER
                     val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
                     val admin = ComponentName(this, KidsMonnterDeviceAdminReceiver::class.java)
-                    val deviceOwnerReady = dpm.isDeviceOwnerApp(packageName) &&
-                        dpm.isAdminActive(admin) &&
-                        dpm.isUninstallBlocked(admin, packageName)
-                    if (!deviceOwnerReady) missing.add("device_owner_uninstall_block")
+                    if (!dpm.isAdminActive(admin)) missing.add("device_admin")
                     if (!Settings.canDrawOverlays(this)) missing.add("overlay")
                     if (!isIgnoringBatteryOptimizations()) missing.add("battery")
                     if (!canUseExactWatchdog()) missing.add("exact_alarm")

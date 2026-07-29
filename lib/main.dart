@@ -261,7 +261,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       (_status?.overlayAllowed == true) &&
       _exactAlarmAllowed &&
       _batteryOptimizationIgnored &&
-      _devicePolicy.uninstallProtectionActive;
+      _devicePolicy.adminActive; // MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER
+
+  Future<void> _activateDeviceAdministrator() async {
+    try {
+      await _channel.invokeMethod<void>('activateDeviceAdministrator');
+    } on PlatformException catch (error) {
+      _showMessage(error.message ?? 'تعذر فتح شاشة تفعيل مسؤول الجهاز.');
+    }
+  }
 
   Future<void> _openRequiredSetting(String method) async {
     try {
@@ -335,21 +343,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 18),
             item(
-              ready: _devicePolicy.uninstallProtectionActive,
+              ready: _devicePolicy.adminActive,
               title: 'منع حذف التطبيق',
-              subtitle: _devicePolicy.uninstallProtectionActive
-                  ? 'تم تفعيل Device Owner ومنع الحذف من إعدادات Android.'
-                  : 'هذه أهم خطوة. بدونها يمكن حذف التطبيق وإلغاء الحماية بالكامل.',
-              action: _showDeviceOwnerInstructions,
-              button: 'إعداد منع الحذف',
+              subtitle: _devicePolicy.adminActive
+                  ? 'مسؤول الجهاز مفعّل. تبقى خدمة الحماية فوق محاولات الوصول إلى الحذف أثناء عمل الحماية.'
+                  : 'فعّل مسؤول الجهاز من شاشة Android. لا يحتاج كمبيوترًا أو إعادة ضبط المصنع.',
+              action: _activateDeviceAdministrator,
+              button: 'تفعيل مسؤول الجهاز',
             ),
-            if (!_devicePolicy.uninstallProtectionActive) ...[
+            if (!_devicePolicy.adminActive) ...[
               const SizedBox(height: 8),
               const Card(
                 child: Padding(
                   padding: EdgeInsets.all(14),
                   child: Text(
-                    'لا يمكن تفعيل Device Owner من داخل التطبيق بعد إعداد الهاتف. يلزم جهاز جديد أو إعادة ضبط المصنع، ثم تثبيت التطبيق وتنفيذ أمر ADB قبل إضافة حساب Google أو إنشاء مستخدمين.',
+                    'هذه الخطوة إجبارية: اضغط تفعيل مسؤول الجهاز ثم اختر «تنشيط». لن تبدأ الحماية قبل نجاحها.',
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                 ),
