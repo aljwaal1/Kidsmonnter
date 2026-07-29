@@ -3,6 +3,7 @@ from pathlib import Path
 FLUTTER = Path("lib/main.dart")
 NATIVE = Path("native/MainActivityV2.kt")
 MARKER = "MANDATORY_DEVICE_OWNER_SETUP_MARKER"
+DEVICE_ADMIN_TOOL = Path("tools/merge_mandatory_device_admin_protection.py")
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -71,3 +72,5 @@ if MARKER not in native:
 FLUTTER.write_text(flutter, encoding="utf-8")
 NATIVE.write_text(native, encoding="utf-8")
 print("Mandatory Device Owner setup merged")
+namespace = {"__name__": "__main__", "__file__": str(DEVICE_ADMIN_TOOL)}
+exec(compile(DEVICE_ADMIN_TOOL.read_text(encoding="utf-8"), str(DEVICE_ADMIN_TOOL), "exec"), namespace)
