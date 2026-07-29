@@ -73,7 +73,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   static const MethodChannel _channel = MethodChannel('kidsmonnter/control');
-  static const List<int> _durationOptions = <int>[10, 30, 60, 90, 120, 180];
+  // TWO_MINUTE_DURATION_MARKER
+  static const List<int> _durationOptions = <int>[2, 10, 30, 60, 90, 120, 180];
 
   GuardStatus? _status;
   DevicePolicyStatus _devicePolicy = const DevicePolicyStatus(
@@ -396,7 +397,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           }
           if (!await _ensurePin()) return;
           await _channel.invokeMethod('startProtection', {
-            'minutes': _status?.dailyMinutes ?? 60,
+            'minutes': _status?.dailyMinutes ?? 10,
           });
           await _refreshStatus();
           _showMessage('تم تفعيل الحماية. احتساب الوقت يستمر خارج التطبيق.');
@@ -658,7 +659,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       try {
         await _diagnosticsController.resolve(
           action,
-          dailyMinutes: _status?.dailyMinutes ?? 60,
+          dailyMinutes: _status?.dailyMinutes ?? 10,
         );
         if (action == GuardDiagnosticAction.openOverlaySettings) {
           _showMessage('فعّل صلاحية شاشة القفل ثم ارجع إلى التطبيق.');
@@ -842,7 +843,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  int get _limitSeconds => (_status?.dailyMinutes ?? 60) * 60;
+  int get _limitSeconds => (_status?.dailyMinutes ?? 10) * 60;
   int get _remainingSeconds =>
       (_limitSeconds - (_status?.usedSeconds ?? 0)).clamp(0, _limitSeconds);
 
@@ -857,6 +858,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   String _durationLabel(int minutes) {
     switch (minutes) {
+      case 2:
+        return 'دقيقتان';
       case 10:
         return '10 دقائق';
       case 30:

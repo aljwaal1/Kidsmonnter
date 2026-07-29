@@ -141,7 +141,7 @@ private fun Context.readGuardLog(): String {
         appendLine("enabled=${prefs.getBoolean("enabled", false)}")
         appendLine("date=${prefs.getString("date", "")}")
         appendLine("usedSeconds=${prefs.getInt("used_seconds", 0)}")
-        appendLine("dailyMinutes=${prefs.getInt("daily_minutes", 60)}")
+        appendLine("dailyMinutes=${prefs.getInt("daily_minutes", 10)}")
         appendLine("heartbeatMs=${prefs.getLong(HEARTBEAT_KEY, 0L)}")
         appendLine("lastTickElapsedMs=${prefs.getLong(LAST_TICK_KEY, 0L)}")
         appendLine("overlayAllowed=${Settings.canDrawOverlays(this@readGuardLog)}")
@@ -564,7 +564,7 @@ class MainActivity : FlutterActivity() {
                             missing,
                         )
                     } else {
-                    val minutes = (call.argument<Int>("minutes") ?: 60).coerceIn(1, 1440)
+                    val minutes = (call.argument<Int>("minutes") ?: 10).coerceIn(1, 1440)
                     prefs.edit()
                         .putInt("daily_minutes", minutes)
                         .putBoolean("enabled", true)
@@ -660,7 +660,7 @@ class MainActivity : FlutterActivity() {
                     result.success(mapOf(
                         "enabled" to prefs.getBoolean("enabled", false),
                         "usedSeconds" to prefs.getInt("used_seconds", 0),
-                        "dailyMinutes" to prefs.getInt("daily_minutes", 60),
+                        "dailyMinutes" to prefs.getInt("daily_minutes", 10),
                         "hasPin" to hasStoredPin(prefs),
                         "failedAttempts" to readFailedAttempts(prefs).size,
                         "parentEmail" to prefs.getString(PARENT_EMAIL_KEY, "").orEmpty(),
@@ -798,7 +798,7 @@ class MonitorService : Service() {
                     lastDiagnosticHeartbeatElapsedMs = nowElapsed
                     appendGuardLog(
                         "SERVICE_HEARTBEAT",
-                        "enabled=${prefs.getBoolean("enabled", false)} screenOn=$screenOn used=${prefs.getInt("used_seconds", 0)} limit=${prefs.getInt("daily_minutes", 60) * 60} overlay=${Settings.canDrawOverlays(this@MonitorService)} lockVisible=${lockOverlayView != null}",
+                        "enabled=${prefs.getBoolean("enabled", false)} screenOn=$screenOn used=${prefs.getInt("used_seconds", 0)} limit=${prefs.getInt("daily_minutes", 10) * 60} overlay=${Settings.canDrawOverlays(this@MonitorService)} lockVisible=${lockOverlayView != null}",
                     )
                 }
             } catch (error: Exception) {
@@ -833,7 +833,7 @@ class MonitorService : Service() {
             resetClockAnchor()
             appendGuardLog(
                 "LOCK_EVALUATION",
-                "used=${prefs.getInt("used_seconds", 0)} limit=${prefs.getInt("daily_minutes", 60) * 60} finished=${isTimeFinished()} screenOn=$screenOn",
+                "used=${prefs.getInt("used_seconds", 0)} limit=${prefs.getInt("daily_minutes", 10) * 60} finished=${isTimeFinished()} screenOn=$screenOn",
             )
             enforceLockIfNeeded()
         } catch (error: Exception) {
@@ -886,7 +886,7 @@ class MonitorService : Service() {
         val elapsedSeconds = ((now - previousAnchor) / 1000L).toInt().coerceIn(0, 300)
         if (elapsedSeconds <= 0) return
 
-        val limit = prefs.getInt("daily_minutes", 60).coerceAtLeast(1) * 60
+        val limit = prefs.getInt("daily_minutes", 10).coerceAtLeast(1) * 60
         val before = prefs.getInt("used_seconds", 0).coerceAtLeast(0)
         val after = (before + elapsedSeconds).coerceAtMost(limit)
         if (after != before) {
@@ -912,7 +912,7 @@ class MonitorService : Service() {
     private fun isTimeFinished(): Boolean {
         if (!prefs.getBoolean("enabled", false)) return false
         if (prefs.getString("unlocked_date", "") == today()) return false
-        val limit = prefs.getInt("daily_minutes", 60).coerceAtLeast(1) * 60
+        val limit = prefs.getInt("daily_minutes", 10).coerceAtLeast(1) * 60
         return prefs.getInt("used_seconds", 0) >= limit
     }
 
@@ -942,7 +942,7 @@ class MonitorService : Service() {
 
         appendGuardLog(
             "LOCK_TRIGGERED",
-            "used=${prefs.getInt("used_seconds", 0)} limit=${prefs.getInt("daily_minutes", 60) * 60} sdk=${Build.VERSION.SDK_INT}",
+            "used=${prefs.getInt("used_seconds", 0)} limit=${prefs.getInt("daily_minutes", 10) * 60} sdk=${Build.VERSION.SDK_INT}",
         )
         showLock()
         if (screenOn) launchLockActivityReliably()
@@ -1000,7 +1000,7 @@ class MonitorService : Service() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastLockLaunchElapsedMs < LOCK_LAUNCH_COOLDOWN_MS) return
         lastLockLaunchElapsedMs = now
-        appendGuardLog("LOCK_CREATE_ATTEMPT", "used=${prefs.getInt("used_seconds", 0)} limit=${prefs.getInt("daily_minutes", 60) * 60}")
+        appendGuardLog("LOCK_CREATE_ATTEMPT", "used=${prefs.getInt("used_seconds", 0)} limit=${prefs.getInt("daily_minutes", 10) * 60}")
 
         try {
             configureDeviceOwnerPolicies()
@@ -1339,7 +1339,7 @@ class LockActivity : Activity() {
     private fun shouldRemainLocked(): Boolean {
         if (!prefs.getBoolean("enabled", false)) return false
         if (prefs.getString("unlocked_date", "") == today()) return false
-        return prefs.getInt("used_seconds", 0) >= prefs.getInt("daily_minutes", 60).coerceAtLeast(1) * 60
+        return prefs.getInt("used_seconds", 0) >= prefs.getInt("daily_minutes", 10).coerceAtLeast(1) * 60
     }
 
     private fun showImmersive() {
