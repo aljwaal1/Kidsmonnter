@@ -17,6 +17,16 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
+def run_merge_tool(path: Path) -> None:
+    namespace = {"__name__": "__main__", "__file__": str(path)}
+    try:
+        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), namespace)
+    except SystemExit as error:
+        if error.code not in (None, 0):
+            raise
+        print(f"Merge tool already satisfied: {path}")
+
+
 flutter = FLUTTER.read_text(encoding="utf-8")
 native = NATIVE.read_text(encoding="utf-8")
 
@@ -139,5 +149,4 @@ for tool in (
     DURATION_WITHOUT_TOGGLE_TOOL,
     FORCE_STOP_GUARD_TOOL,
 ):
-    namespace = {"__name__": "__main__", "__file__": str(tool)}
-    exec(compile(tool.read_text(encoding="utf-8"), str(tool), "exec"), namespace)
+    run_merge_tool(tool)
