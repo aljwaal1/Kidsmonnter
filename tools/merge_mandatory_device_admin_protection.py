@@ -6,6 +6,8 @@ MARKER = "MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER"
 UNINSTALL_GUARD_TOOL = Path("tools/merge_parent_pin_uninstall_guard.py")
 UNINSTALL_GUARD_ORDER_TOOL = Path("tools/fix_uninstall_guard_class_order.py")
 DURATION_WITHOUT_TOGGLE_TOOL = Path("tools/merge_duration_without_toggle.py")
+FORCE_STOP_GUARD_TOOL = Path("tools/merge_parent_pin_force_stop_guard.py")
+COUNTER_RECOVERY_TOOL = Path("tools/merge_generic_counter_recovery.py")
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -14,6 +16,16 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     if old not in text:
         raise SystemExit(f"تعذر دمج {label}: المقطع المتوقع غير موجود")
     return text.replace(old, new, 1)
+
+
+def run_merge_tool(path: Path) -> None:
+    namespace = {"__name__": "__main__", "__file__": str(path)}
+    try:
+        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), namespace)
+    except SystemExit as error:
+        if error.code not in (None, 0):
+            raise
+        print(f"Merge tool already satisfied: {path}")
 
 
 flutter = FLUTTER.read_text(encoding="utf-8")
@@ -136,6 +148,7 @@ for tool in (
     UNINSTALL_GUARD_TOOL,
     UNINSTALL_GUARD_ORDER_TOOL,
     DURATION_WITHOUT_TOGGLE_TOOL,
+    FORCE_STOP_GUARD_TOOL,
+    COUNTER_RECOVERY_TOOL,
 ):
-    namespace = {"__name__": "__main__", "__file__": str(tool)}
-    exec(compile(tool.read_text(encoding="utf-8"), str(tool), "exec"), namespace)
+    run_merge_tool(tool)

@@ -42,13 +42,16 @@ void main() {
       expect(nativeEngine, contains('scheduleRestart()'));
     });
 
-    test('accounts elapsed screen-on time outside the Flutter UI', () {
+    test('accounts and recovers eligible usage outside the Flutter UI', () {
       expect(nativeEngine, contains('SystemClock.elapsedRealtime()'));
       expect(nativeEngine, contains('private fun accountElapsedUsage()'));
+      expect(nativeEngine, contains('private fun isUsageEligibleNow()'));
+      expect(nativeEngine, contains('!keyguard.isDeviceLocked'));
       expect(
         nativeEngine,
-        contains('if (!screenOn || !prefs.getBoolean("enabled", false)) return'),
+        contains('if (!prefs.getBoolean("enabled", false) || !eligibleNow) return'),
       );
+      expect(nativeEngine, contains('recoverElapsedUsageIfNeeded'));
       expect(nativeEngine, contains('.putInt("used_seconds", after)'));
     });
 
