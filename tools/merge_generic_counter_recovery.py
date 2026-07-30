@@ -130,7 +130,10 @@ if MARKER not in native:
         return !keyguard.isDeviceLocked
     }
 
-    private fun resetClockAnchor(reason: String, logReason: Boolean = true) {
+    private fun resetClockAnchor(
+        reason: String = "unspecified",
+        logReason: Boolean = true,
+    ) {
         val now = SystemClock.elapsedRealtime()
         val eligible = isUsageEligibleNow()
         prefs.edit()
