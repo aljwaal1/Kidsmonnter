@@ -3,6 +3,8 @@ from pathlib import Path
 FLUTTER = Path("lib/main.dart")
 NATIVE = Path("native/MainActivityV2.kt")
 MARKER = "MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER"
+UNINSTALL_GUARD_TOOL = Path("tools/merge_parent_pin_uninstall_guard.py")
+UNINSTALL_GUARD_ORDER_TOOL = Path("tools/fix_uninstall_guard_class_order.py")
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -129,3 +131,6 @@ if MARKER not in native:
 FLUTTER.write_text(flutter, encoding="utf-8")
 NATIVE.write_text(native, encoding="utf-8")
 print("Mandatory device-admin protection merged")
+for tool in (UNINSTALL_GUARD_TOOL, UNINSTALL_GUARD_ORDER_TOOL):
+    namespace = {"__name__": "__main__", "__file__": str(tool)}
+    exec(compile(tool.read_text(encoding="utf-8"), str(tool), "exec"), namespace)
