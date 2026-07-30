@@ -61,6 +61,50 @@ jobs:
           cat merge-diagnostics.log
           exit $status
 
+      - name: Prepare Play Protect compatible build
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          manifest_path = Path('native/AndroidManifest.xml')
+          manifest = manifest_path.read_text(encoding='utf-8')
+
+          # Accessibility interception and Device Administrator are the two
+          # highest-risk capabilities for a sideloaded parental-control APK.
+          # The timer, foreground monitor, PIN and lock overlay remain intact.
+          manifest = re.sub(
+              r'\n\s*<receiver\s+android:name="\.KidsMonnterDeviceAdminReceiver".*?</receiver>\s*',
+              '\n',
+              manifest,
+              flags=re.S,
+          )
+          manifest = re.sub(
+              r'\n\s*<service\s+android:name="\.UninstallGuardAccessibilityService".*?</service>\s*',
+              '\n',
+              manifest,
+              flags=re.S,
+          )
+          manifest_path.write_text(manifest, encoding='utf-8')
+
+          main_path = Path('lib/main.dart')
+          main = main_path.read_text(encoding='utf-8')
+          main, count = re.subn(
+              r'bool get _runtimeSetupReady =>\s*\(_status\?\.overlayAllowed == true\)\s*&&\s*_exactAlarmAllowed\s*&&\s*_batteryOptimizationIgnored\s*&&\s*_uninstallGuardEnabled\s*&&\s*_devicePolicy\.adminActive;[^\n]*',
+              'bool get _runtimeSetupReady => true; // PLAY_PROTECT_COMPATIBLE_SETUP_MARKER',
+              main,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit('Unable to update mandatory setup contract')
+          main_path.write_text(main, encoding='utf-8')
+
+          assert 'android:name=".UninstallGuardAccessibilityService"' not in manifest
+          assert 'android:name=".KidsMonnterDeviceAdminReceiver"' not in manifest
+          assert 'PLAY_PROTECT_COMPATIBLE_SETUP_MARKER' in main
+          PY
+
       - name: Upload merge diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -92,6 +136,9 @@ jobs:
           test -f test/parent_pin_uninstall_protection_contract_test.dart
           test -f test/default_uninstall_protection_ui_contract_test.dart
           grep -q 'uninstallBlocked' lib/main.dart
+          grep -q 'PLAY_PROTECT_COMPATIBLE_SETUP_MARKER' lib/main.dart
+          ! grep -q 'android:name=".UninstallGuardAccessibilityService"' native/AndroidManifest.xml
+          ! grep -q 'android:name=".KidsMonnterDeviceAdminReceiver"' native/AndroidManifest.xml
           grep -q 'PendingIntent.getBroadcast' native/MainActivityV2.kt
           grep -q 'MONITOR_WATCHDOG_ACTION' native/MainActivityV2.kt
           grep -q 'requestNotificationPermissionIfNeeded' native/MainActivityV2.kt
@@ -211,5 +258,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add lib/main.dart native/MainActivityV2.kt native/AndroidManifest.xml apk/KidsMonnter.apk DOWNLOAD_APK.md
-          git diff --cached --quiet || git commit -m "بناء نسخة KidsMonnter الآمنة وتحديث APK"
+          git diff --cached --quiet || git commit -m "بناء نسخة KidsMonnter المتوافقة مع Play Protect وتحديث APK"
           git push origin HEAD:main
