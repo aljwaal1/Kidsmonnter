@@ -7,6 +7,7 @@ UNINSTALL_GUARD_TOOL = Path("tools/merge_parent_pin_uninstall_guard.py")
 UNINSTALL_GUARD_ORDER_TOOL = Path("tools/fix_uninstall_guard_class_order.py")
 DURATION_WITHOUT_TOGGLE_TOOL = Path("tools/merge_duration_without_toggle.py")
 FORCE_STOP_GUARD_TOOL = Path("tools/merge_parent_pin_force_stop_guard.py")
+COUNTER_RECOVERY_TOOL = Path("tools/merge_generic_counter_recovery.py")
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -148,5 +149,6 @@ for tool in (
     UNINSTALL_GUARD_ORDER_TOOL,
     DURATION_WITHOUT_TOGGLE_TOOL,
     FORCE_STOP_GUARD_TOOL,
+    COUNTER_RECOVERY_TOOL,
 ):
     run_merge_tool(tool)
