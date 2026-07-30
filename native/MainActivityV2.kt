@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.*
 import android.app.admin.DeviceAdminReceiver
 import android.app.admin.DevicePolicyManager
+import android.accessibilityservice.AccessibilityService
 import android.content.*
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -19,6 +20,7 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.View
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityEvent
 import android.widget.*
 import androidx.core.app.NotificationCompat
 import io.flutter.embedding.android.FlutterActivity
@@ -61,6 +63,8 @@ private const val LOCK_ACTION_GRACE_MS = 3_000L
 private const val PIN_FAILURE_STREAK_KEY = "lock_pin_failure_streak"
 private const val PIN_BLOCK_UNTIL_MS_KEY = "lock_pin_block_until_ms"
 private const val MAX_PIN_BLOCK_MS = 60_000L
+private const val UNINSTALL_AUTHORIZED_UNTIL_KEY = "uninstall_authorized_until_ms"
+private const val UNINSTALL_AUTH_WINDOW_MS = 90_000L
 
 private fun Context.guardPrefs(): SharedPreferences =
     getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -92,6 +96,20 @@ private fun Context.isIgnoringBatteryOptimizations(): Boolean =
 private fun Context.canUseExactWatchdog(): Boolean =
     Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
         (getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms()
+
+// PARENT_PIN_UNINSTALL_GUARD_MARKER
+private fun Context.isUninstallGuardAccessibilityEnabled(): Boolean {
+    val expected = ComponentName(this, UninstallGuardAccessibilityService::class.java)
+        .flattenToString()
+    val enabled = Settings.Secure.getString(
+        contentResolver,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+    ).orEmpty()
+    return enabled.split(':').any { it.equals(expected, ignoreCase = true) }
+}
+
+private fun SharedPreferences.isParentUninstallAuthorized(): Boolean =
+    System.currentTimeMillis() <= getLong(UNINSTALL_AUTHORIZED_UNTIL_KEY, 0L)
 
 private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 private fun timestamp(): String = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
@@ -411,32 +429,35 @@ private fun Activity.openSelfUninstallScreen() {
 private fun Activity.prepareParentAuthorizedUninstall(prefs: SharedPreferences): Boolean {
     val manager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
     val admin = deviceAdminComponent()
-    if (!manager.isDeviceOwnerApp(packageName)) {
-        appendGuardLog("UNINSTALL_AUTHORIZATION_REJECTED", "reason=device_owner_required")
-        return false
-    }
-
     return try {
         prefs.edit()
             .putBoolean("enabled", false)
+            .putLong(
+                UNINSTALL_AUTHORIZED_UNTIL_KEY,
+                System.currentTimeMillis() + UNINSTALL_AUTH_WINDOW_MS,
+            )
             .remove(LAST_TICK_KEY)
             .remove("unlocked_date")
             .commit()
         syncBootProtectionState(false)
         stopService(Intent(this, MonitorService::class.java))
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            manager.setStatusBarDisabled(admin, false)
+        if (manager.isDeviceOwnerApp(packageName)) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                manager.setStatusBarDisabled(admin, false)
+            }
+            manager.setLockTaskPackages(admin, emptyArray<String>())
+            manager.setUninstallBlocked(admin, packageName, false)
+            @Suppress("DEPRECATION")
+            manager.clearDeviceOwnerApp(packageName)
+            appendGuardLog("UNINSTALL_AUTHORIZED_BY_PARENT_PIN", "mode=device_owner")
+        } else {
+            if (manager.isAdminActive(admin)) manager.removeActiveAdmin(admin)
+            appendGuardLog("UNINSTALL_AUTHORIZED_BY_PARENT_PIN", "mode=device_admin")
         }
-        manager.setLockTaskPackages(admin, emptyArray<String>())
-        manager.setUninstallBlocked(admin, packageName, false)
-        appendGuardLog("UNINSTALL_AUTHORIZED_BY_PARENT_PIN", "deviceOwner=true")
-
-        @Suppress("DEPRECATION")
-        manager.clearDeviceOwnerApp(packageName)
-        appendGuardLog("DEVICE_OWNER_CLEARED_FOR_UNINSTALL")
         true
     } catch (error: Exception) {
+        prefs.edit().remove(UNINSTALL_AUTHORIZED_UNTIL_KEY).apply()
         appendGuardLog("UNINSTALL_AUTHORIZATION_FAILED", error = error)
         false
     }
@@ -576,6 +597,7 @@ class MainActivity : FlutterActivity() {
                     val dpm = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
                     val admin = ComponentName(this, KidsMonnterDeviceAdminReceiver::class.java)
                     if (!dpm.isAdminActive(admin)) missing.add("device_admin")
+                    if (!isUninstallGuardAccessibilityEnabled()) missing.add("uninstall_guard")
                     if (!Settings.canDrawOverlays(this)) missing.add("overlay")
                     if (!isIgnoringBatteryOptimizations()) missing.add("battery")
                     if (!canUseExactWatchdog()) missing.add("exact_alarm")
@@ -690,8 +712,13 @@ class MainActivity : FlutterActivity() {
                         "overlayAllowed" to Settings.canDrawOverlays(this),
                         "serviceHeartbeatMs" to prefs.getLong(HEARTBEAT_KEY, 0L),
                         "exactAlarmAllowed" to canUseExactWatchdog(),
-                        "batteryOptimizationIgnored" to isIgnoringBatteryOptimizations()
+                        "batteryOptimizationIgnored" to isIgnoringBatteryOptimizations(),
+                        "uninstallGuardEnabled" to isUninstallGuardAccessibilityEnabled()
                     ))
+                }
+                "openAccessibilitySettings" -> {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    result.success(true)
                 }
                 "openOverlaySettings" -> {
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
@@ -705,14 +732,7 @@ class MainActivity : FlutterActivity() {
                         appendGuardLog("UNINSTALL_PIN_REJECTED")
                         result.error("WRONG_PIN", "رمز ولي الأمر غير صحيح", null)
                     } else {
-                        val manager = getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
-                        if (!manager.isDeviceOwnerApp(packageName)) {
-                            result.error(
-                                "DEVICE_OWNER_REQUIRED",
-                                "منع الحذف الكامل يحتاج تفعيل Device Owner أولاً",
-                                null,
-                            )
-                        } else if (!prepareParentAuthorizedUninstall(prefs)) {
+                        if (!prepareParentAuthorizedUninstall(prefs)) {
                             result.error(
                                 "UNINSTALL_PREPARE_FAILED",
                                 "تعذر إلغاء حماية الحذف بصورة آمنة",
@@ -1539,6 +1559,121 @@ class LockActivity : Activity() {
 }
 
 class KidsMonnterDeviceAdminReceiver : DeviceAdminReceiver()
+
+// UNINSTALL_GUARD_CLASS_ORDER_MARKER
+class UninstallPinActivity : Activity() {
+    private val prefs by lazy { guardPrefs() }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        val pin = EditText(this).apply {
+            hint = "رمز الأب من 6 أرقام"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            maxLines = 1
+        }
+        val status = TextView(this).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.RED)
+        }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(42, 42, 42, 42)
+            addView(TextView(this@UninstallPinActivity).apply {
+                text = "لا يمكن حذف التطبيق دون رمز الأب"
+                textSize = 24f
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(-1, -2))
+            addView(pin, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 24 })
+            addView(status, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 12 })
+            addView(Button(this@UninstallPinActivity).apply {
+                text = "السماح بالحذف"
+                setOnClickListener {
+                    val candidate = pin.text.toString().trim()
+                    if (!verifyPin(prefs, candidate)) {
+                        recordFailedAttempt(
+                            this@UninstallPinActivity,
+                            prefs,
+                            "محاولة حذف التطبيق دون رمز صحيح",
+                        )
+                        status.text = "رمز الأب غير صحيح"
+                        pin.text.clear()
+                    } else if (!prepareParentAuthorizedUninstall(prefs)) {
+                        status.text = "تعذر تجهيز الحذف بصورة آمنة"
+                    } else {
+                        openSelfUninstallScreen()
+                        finish()
+                    }
+                }
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 18 })
+            addView(Button(this@UninstallPinActivity).apply {
+                text = "رجوع"
+                setOnClickListener { finish() }
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 10 })
+        }
+        setContentView(root)
+    }
+}
+
+class UninstallGuardAccessibilityService : AccessibilityService() {
+    private val protectedPackages = setOf(
+        "com.android.settings",
+        "com.android.packageinstaller",
+        "com.google.android.packageinstaller",
+        "com.android.permissioncontroller",
+        "com.google.android.permissioncontroller",
+    )
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        event ?: return
+        val prefs = guardPrefs()
+        if (!hasStoredPin(prefs) || prefs.isParentUninstallAuthorized()) return
+
+        val sourcePackage = event.packageName?.toString().orEmpty()
+        if (sourcePackage !in protectedPackages) return
+
+        val className = event.className?.toString().orEmpty()
+        val visibleText = buildString {
+            append(event.text.joinToString(" "))
+            append(' ')
+            append(event.contentDescription?.toString().orEmpty())
+        }
+        val mentionsThisApp = visibleText.contains("حارس وقت الأطفال", ignoreCase = true) ||
+            visibleText.contains("KidsMonnter", ignoreCase = true) ||
+            visibleText.contains(packageName, ignoreCase = true)
+        val sensitiveClass = listOf(
+            "UninstallerActivity",
+            "UninstallActivity",
+            "InstalledAppDetails",
+            "DeviceAdminSettings",
+            "DeviceAdminAdd",
+            "ManageApplications",
+        ).any { className.contains(it, ignoreCase = true) }
+        val deviceAdminScreen = className.contains("DeviceAdmin", ignoreCase = true)
+
+        if (!mentionsThisApp && !deviceAdminScreen && !sensitiveClass) return
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        try {
+            startActivity(
+                Intent(this, UninstallPinActivity::class.java).addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                ),
+            )
+            appendGuardLog(
+                "UNINSTALL_ATTEMPT_INTERCEPTED",
+                "package=$sourcePackage class=$className",
+            )
+        } catch (error: Exception) {
+            appendGuardLog("UNINSTALL_GUARD_LAUNCH_FAILED", error = error)
+        }
+    }
+
+    override fun onInterrupt() = Unit
+}
+
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {

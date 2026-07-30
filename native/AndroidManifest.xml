@@ -64,6 +64,29 @@
             </intent-filter>
         </activity>
 
+        <!-- PARENT_PIN_UNINSTALL_GUARD_MARKER -->
+        <activity
+            android:name=".UninstallPinActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:theme="@style/LaunchTheme" />
+
+        <service
+            android:name=".UninstallGuardAccessibilityService"
+            android:enabled="true"
+            android:exported="false"
+            android:label="حارس حذف التطبيق"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/uninstall_guard_accessibility" />
+        </service>
+
         <service
             android:name=".MonitorService"
             android:enabled="true"

@@ -88,6 +88,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _error;
   bool _exactAlarmAllowed = false;
   bool _batteryOptimizationIgnored = false;
+  bool _uninstallGuardEnabled = false;
 
   late final GuardDiagnosticsController _diagnosticsController =
       GuardDiagnosticsController(
@@ -134,6 +135,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _devicePolicy = DevicePolicyStatus.fromMap(policyMap);
         _exactAlarmAllowed = map['exactAlarmAllowed'] == true;
         _batteryOptimizationIgnored = map['batteryOptimizationIgnored'] == true;
+        _uninstallGuardEnabled = map['uninstallGuardEnabled'] == true;
         _error = null;
       });
     } on PlatformException catch (error) {
@@ -261,7 +263,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       (_status?.overlayAllowed == true) &&
       _exactAlarmAllowed &&
       _batteryOptimizationIgnored &&
+      _uninstallGuardEnabled &&
       _devicePolicy.adminActive; // MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER
+  // PARENT_PIN_UNINSTALL_GUARD_MARKER
 
   Future<void> _activateDeviceAdministrator() async {
     try {
@@ -363,6 +367,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
               ),
             ],
+            const SizedBox(height: 10),
+            item(
+              ready: _uninstallGuardEnabled,
+              title: 'قفل الحذف برمز الأب',
+              subtitle: _uninstallGuardEnabled
+                  ? 'مفعّل: تتم مقاطعة شاشة حذف التطبيق ويُطلب رمز الأب.'
+                  : 'إجباري: فعّل خدمة حارس وقت الأطفال ضمن إمكانية الوصول.',
+              action: () => _openRequiredSetting('openAccessibilitySettings'),
+              button: 'تفعيل حارس الحذف',
+            ),
             const SizedBox(height: 10),
             item(
               ready: status.overlayAllowed,
