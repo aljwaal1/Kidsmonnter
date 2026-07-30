@@ -1,4 +1,4 @@
-name: Build KidsMonnter APK
+name: Build Signed KidsMonnter APK
 
 on:
   workflow_dispatch:
@@ -19,6 +19,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || 'KidsMonnter-Release-2026' }}
+      KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || 'KidsMonnter-Release-2026' }}
+      KEY_ALIAS: kidsmonnter
 
     steps:
       - name: Checkout repository
@@ -35,6 +39,30 @@ jobs:
         with:
           channel: stable
           cache: true
+
+      - name: Restore persistent release signing key
+        uses: actions/cache@v4
+        with:
+          path: .signing/kidsmonnter-release.jks
+          key: kidsmonnter-release-keystore-v1
+
+      - name: Create release signing key when absent
+        run: |
+          set -euo pipefail
+          mkdir -p .signing
+          if [ ! -s .signing/kidsmonnter-release.jks ]; then
+            keytool -genkeypair \
+              -v \
+              -keystore .signing/kidsmonnter-release.jks \
+              -storepass "$KEYSTORE_PASSWORD" \
+              -keypass "$KEY_PASSWORD" \
+              -alias "$KEY_ALIAS" \
+              -keyalg RSA \
+              -keysize 4096 \
+              -validity 10000 \
+              -dname "CN=KidsMonnter, OU=Android Release, O=KidsMonnter, L=Amman, C=JO"
+          fi
+          test -s .signing/kidsmonnter-release.jks
 
       - name: Generate Android project
         run: flutter create --platforms=android --org com.explapp --no-pub .
@@ -82,6 +110,7 @@ jobs:
 
       - name: Install native Android implementation
         run: |
+          set -euo pipefail
           rm -f test/widget_test.dart
           mkdir -p android/app/src/main/kotlin/com/explapp/kidstimeguard
           cp native/MainActivityV2.kt android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
@@ -93,37 +122,99 @@ jobs:
           sed -i 's/com.explapp.kidsmonnter/com.explapp.kidstimeguard/g' android/app/build.gradle.kts
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts
 
+      - name: Configure stable release signing
+        run: |
+          set -euo pipefail
+          cp .signing/kidsmonnter-release.jks android/app/kidsmonnter-release.jks
+          cat > android/key.properties <<EOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=kidsmonnter-release.jks
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('android/app/build.gradle.kts')
+          text = path.read_text(encoding='utf-8')
+
+          properties_block = '''val keystoreProperties = java.util.Properties()
+          val keystorePropertiesFile = rootProject.file("key.properties")
+          if (keystorePropertiesFile.exists()) {
+              java.io.FileInputStream(keystorePropertiesFile).use { keystoreProperties.load(it) }
+          }
+
+          '''
+          if 'val keystoreProperties = java.util.Properties()' not in text:
+              text = text.replace('android {', properties_block + 'android {', 1)
+
+          signing_block = '''    signingConfigs {
+              create("release") {
+                  keyAlias = keystoreProperties["keyAlias"] as String
+                  keyPassword = keystoreProperties["keyPassword"] as String
+                  storeFile = file(keystoreProperties["storeFile"] as String)
+                  storePassword = keystoreProperties["storePassword"] as String
+              }
+          }
+
+          '''
+          if 'create("release")' not in text:
+              text = text.replace('    buildTypes {', signing_block + '    buildTypes {', 1)
+
+          old = 'signingConfig = signingConfigs.getByName("debug")'
+          if old not in text and 'signingConfig = signingConfigs.getByName("release")' not in text:
+              raise SystemExit('Release signing assignment was not found')
+          text = text.replace(old, 'signingConfig = signingConfigs.getByName("release")')
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          grep -q 'create("release")' android/app/build.gradle.kts
+          grep -q 'signingConfigs.getByName("release")' android/app/build.gradle.kts
+
       - name: Install packages
         run: flutter pub get
 
       - name: Analyze application
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
-      - name: Build release APK
+      - name: Build signed release APK
         run: flutter build apk --release
 
-      - name: Verify generated APK
+      - name: Verify signature and generated APK
         run: |
-          test -s build/app/outputs/flutter-apk/app-release.apk
+          set -euo pipefail
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          test -s "$APK"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          test -x "$APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee apk-signature.txt
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' apk-signature.txt
+          sha256sum "$APK" | tee KidsMonnter.sha256
           mkdir -p dist
-          cp build/app/outputs/flutter-apk/app-release.apk dist/KidsMonnter.apk
+          cp "$APK" dist/KidsMonnter.apk
+          cp apk-signature.txt dist/KidsMonnter-cert.txt
+          cp KidsMonnter.sha256 dist/KidsMonnter.sha256
 
-      - name: Upload APK artifact
+      - name: Upload signed APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KidsMonnter-${{ github.sha }}
-          path: dist/KidsMonnter.apk
+          name: KidsMonnter-signed-${{ github.sha }}
+          path: dist/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
-      - name: Publish APK on main
+      - name: Publish signed APK on main
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
+          set -euo pipefail
           mkdir -p apk
           cp dist/KidsMonnter.apk apk/KidsMonnter.apk
-          printf '# تحميل التطبيق\n\n[تحميل KidsMonnter APK](./apk/KidsMonnter.apk)\n' > DOWNLOAD_APK.md
+          cp dist/KidsMonnter-cert.txt apk/KidsMonnter-cert.txt
+          cp dist/KidsMonnter.sha256 apk/KidsMonnter.sha256
+          printf '# تحميل التطبيق\n\n[تحميل KidsMonnter APK](./apk/KidsMonnter.apk)\n\n- [بصمة SHA-256](./apk/KidsMonnter.sha256)\n- [معلومات شهادة التوقيع](./apk/KidsMonnter-cert.txt)\n' > DOWNLOAD_APK.md
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add apk/KidsMonnter.apk DOWNLOAD_APK.md
-          git diff --cached --quiet || git commit -m "بناء KidsMonnter المتوافق مع Play Protect"
+          git add apk/KidsMonnter.apk apk/KidsMonnter-cert.txt apk/KidsMonnter.sha256 DOWNLOAD_APK.md
+          git diff --cached --quiet || git commit -m "بناء KidsMonnter بتوقيع Release ثابت"
           git push origin HEAD:main
