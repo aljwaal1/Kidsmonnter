@@ -21,6 +21,7 @@ import android.view.WindowInsetsController
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.*
 import androidx.core.app.NotificationCompat
 import io.flutter.embedding.android.FlutterActivity
@@ -40,6 +41,7 @@ private const val PARENT_EMAIL_KEY = "parent_email"
 private const val PIN_HASH_KEY = "parent_pin_hash"
 private const val LEGACY_PIN_KEY = "parent_pin"
 private const val LAST_TICK_KEY = "last_tick_elapsed_ms"
+private const val LAST_USAGE_ELIGIBLE_KEY = "last_usage_eligible"
 private const val HEARTBEAT_KEY = "service_heartbeat_ms"
 private const val MONITOR_WATCHDOG_ACTION = "com.explapp.kidstimeguard.RESTART_MONITOR"
 private const val WATCHDOG_REQUEST_CODE = 991
@@ -65,6 +67,8 @@ private const val PIN_BLOCK_UNTIL_MS_KEY = "lock_pin_block_until_ms"
 private const val MAX_PIN_BLOCK_MS = 60_000L
 private const val UNINSTALL_AUTHORIZED_UNTIL_KEY = "uninstall_authorized_until_ms"
 private const val UNINSTALL_AUTH_WINDOW_MS = 90_000L
+private const val SETTINGS_AUTHORIZED_UNTIL_ELAPSED_KEY = "settings_authorized_until_elapsed_ms"
+private const val SETTINGS_AUTH_WINDOW_MS = 90_000L
 
 private fun Context.guardPrefs(): SharedPreferences =
     getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -110,6 +114,19 @@ private fun Context.isUninstallGuardAccessibilityEnabled(): Boolean {
 
 private fun SharedPreferences.isParentUninstallAuthorized(): Boolean =
     System.currentTimeMillis() <= getLong(UNINSTALL_AUTHORIZED_UNTIL_KEY, 0L)
+
+// PARENT_PIN_FORCE_STOP_GUARD_MARKER
+private fun SharedPreferences.isParentAppSettingsAuthorized(): Boolean {
+    val now = SystemClock.elapsedRealtime()
+    val until = getLong(SETTINGS_AUTHORIZED_UNTIL_ELAPSED_KEY, 0L)
+    return until >= now && until - now <= SETTINGS_AUTH_WINDOW_MS
+}
+
+private fun SharedPreferences.authorizeParentAppSettings(): Boolean =
+    edit().putLong(
+        SETTINGS_AUTHORIZED_UNTIL_ELAPSED_KEY,
+        SystemClock.elapsedRealtime() + SETTINGS_AUTH_WINDOW_MS,
+    ).commit()
 
 private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 private fun timestamp(): String = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
@@ -648,6 +665,22 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     }
                 }
+                // DURATION_WITHOUT_PROTECTION_TOGGLE_MARKER
+                "setDailyMinutes" -> {
+                    val pin = call.argument<String>("pin").orEmpty()
+                    val minutes = (call.argument<Int>("minutes") ?: 10).coerceIn(1, 1440)
+                    if (!verifyPin(prefs, pin)) {
+                        recordFailedAttempt(this, prefs, "تغيير المدة اليومية")
+                        result.error("WRONG_PIN", "رمز ولي الأمر غير صحيح", null)
+                    } else {
+                        prefs.edit().putInt("daily_minutes", minutes).commit()
+                        appendGuardLog(
+                            "DAILY_MINUTES_UPDATED",
+                            "minutes=$minutes protectionEnabled=${prefs.getBoolean("enabled", false)}",
+                        )
+                        result.success(true)
+                    }
+                }
                 "addTime" -> {
                     val pin = call.argument<String>("pin").orEmpty()
                     val minutes = (call.argument<Int>("minutes") ?: 0).coerceAtLeast(0)
@@ -806,11 +839,16 @@ class MonitorService : Service() {
                     Intent.ACTION_SCREEN_OFF -> {
                         accountElapsedUsage()
                         screenOn = false
-                        resetClockAnchor()
+                        resetClockAnchor("screen_off")
                     }
-                    Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                    Intent.ACTION_SCREEN_ON -> {
                         screenOn = true
-                        resetClockAnchor()
+                        resetClockAnchor("screen_on_locked")
+                        enforceLockIfNeeded()
+                    }
+                    Intent.ACTION_USER_PRESENT -> {
+                        screenOn = true
+                        resetClockAnchor("user_present")
                         enforceLockIfNeeded()
                     }
                 }
@@ -833,7 +871,7 @@ class MonitorService : Service() {
                     accountElapsedUsage()
                     enforceLockIfNeeded()
                 } else {
-                    resetClockAnchor()
+                    resetClockAnchor("protection_disabled", logReason = false)
                 }
 
                 val nowElapsed = SystemClock.elapsedRealtime()
@@ -864,7 +902,8 @@ class MonitorService : Service() {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_USER_PRESENT)
         })
-        resetClockAnchor()
+        resetIfNewDay()
+        recoverElapsedUsageIfNeeded("service_created")
         scheduleMonitorWatchdog()
         handler.post(ticker)
         appendGuardLog("SERVICE_FOREGROUND_READY", "screenOn=$screenOn")
@@ -873,7 +912,7 @@ class MonitorService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         appendGuardLog("SERVICE_START_COMMAND", "action=${intent?.action.orEmpty()} flags=$flags startId=$startId")
         try {
-            resetClockAnchor()
+            recoverElapsedUsageIfNeeded("service_start_command")
             appendGuardLog(
                 "LOCK_EVALUATION",
                 "used=${prefs.getInt("used_seconds", 0)} limit=${prefs.getInt("daily_minutes", 10) * 60} finished=${isTimeFinished()} screenOn=$screenOn",
@@ -913,34 +952,93 @@ class MonitorService : Service() {
         scheduleMonitorWatchdog(2_000L)
     }
 
-    private fun resetClockAnchor() {
-        prefs.edit().putLong(LAST_TICK_KEY, SystemClock.elapsedRealtime()).apply()
+    // GENERIC_COUNTER_RECOVERY_MARKER
+    private fun isUsageEligibleNow(): Boolean {
+        if (!screenOn) return false
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
+        return !keyguard.isDeviceLocked
+    }
+
+    private fun resetClockAnchor(
+        reason: String = "unspecified",
+        logReason: Boolean = true,
+    ) {
+        val now = SystemClock.elapsedRealtime()
+        val eligible = isUsageEligibleNow()
+        prefs.edit()
+            .putLong(LAST_TICK_KEY, now)
+            .putBoolean(LAST_USAGE_ELIGIBLE_KEY, eligible)
+            .apply()
+        if (logReason) {
+            appendGuardLog(
+                "COUNTER_ANCHOR_RESET_REASON",
+                "reason=$reason elapsed=$now screenOn=$screenOn eligible=$eligible",
+            )
+        }
+    }
+
+    private fun applyElapsedUsage(elapsedSeconds: Int, eventName: String, reason: String) {
+        if (elapsedSeconds <= 0) return
+        val limit = prefs.getInt("daily_minutes", 10).coerceAtLeast(1) * 60
+        val before = prefs.getInt("used_seconds", 0).coerceAtLeast(0)
+        val after = (before + elapsedSeconds).coerceAtMost(limit)
+        if (after == before) return
+
+        prefs.edit().putInt("used_seconds", after).commit()
+        appendGuardLog(
+            eventName,
+            "reason=$reason before=$before after=$after elapsed=$elapsedSeconds limit=$limit",
+        )
+        if (before < limit - 300 && after >= limit - 300) {
+            notifyWarning("تبقّى 5 دقائق من وقت الهاتف")
+        }
+        if (before < limit - 60 && after >= limit - 60) {
+            notifyWarning("تبقّت دقيقة واحدة من وقت الهاتف")
+        }
+    }
+
+    private fun recoverElapsedUsageIfNeeded(reason: String) {
+        val now = SystemClock.elapsedRealtime()
+        val previousAnchor = prefs.getLong(LAST_TICK_KEY, 0L)
+        val wasEligible = prefs.getBoolean(LAST_USAGE_ELIGIBLE_KEY, false)
+        val eligibleNow = isUsageEligibleNow()
+
+        if (previousAnchor <= 0L || previousAnchor > now) {
+            resetClockAnchor("$reason-invalid_anchor")
+            return
+        }
+        if (!prefs.getBoolean("enabled", false) ||
+            prefs.getString("unlocked_date", "") == today() ||
+            !wasEligible ||
+            !eligibleNow
+        ) {
+            resetClockAnchor("$reason-not_eligible")
+            return
+        }
+
+        val elapsedSeconds = ((now - previousAnchor) / 1000L).toInt().coerceAtLeast(0)
+        prefs.edit()
+            .putLong(LAST_TICK_KEY, now)
+            .putBoolean(LAST_USAGE_ELIGIBLE_KEY, eligibleNow)
+            .apply()
+        applyElapsedUsage(elapsedSeconds, "COUNTER_RECOVERED", reason)
     }
 
     private fun accountElapsedUsage() {
         val now = SystemClock.elapsedRealtime()
-        val previousAnchor = prefs.getLong(LAST_TICK_KEY, now)
-        prefs.edit().putLong(LAST_TICK_KEY, now).apply()
+        val previousAnchor = prefs.getLong(LAST_TICK_KEY, 0L)
+        val eligibleNow = isUsageEligibleNow()
+        prefs.edit()
+            .putLong(LAST_TICK_KEY, now)
+            .putBoolean(LAST_USAGE_ELIGIBLE_KEY, eligibleNow)
+            .apply()
 
-        if (!screenOn || !prefs.getBoolean("enabled", false)) return
+        if (!prefs.getBoolean("enabled", false) || !eligibleNow) return
         if (prefs.getString("unlocked_date", "") == today()) return
         if (previousAnchor <= 0L || previousAnchor > now) return
 
-        val elapsedSeconds = ((now - previousAnchor) / 1000L).toInt().coerceIn(0, 300)
-        if (elapsedSeconds <= 0) return
-
-        val limit = prefs.getInt("daily_minutes", 10).coerceAtLeast(1) * 60
-        val before = prefs.getInt("used_seconds", 0).coerceAtLeast(0)
-        val after = (before + elapsedSeconds).coerceAtMost(limit)
-        if (after != before) {
-            prefs.edit().putInt("used_seconds", after).apply()
-            if (after == limit || after % 15 == 0) {
-                appendGuardLog("USAGE_ACCOUNTED", "before=$before after=$after elapsed=$elapsedSeconds limit=$limit")
-            }
-        }
-
-        if (before < limit - 300 && after >= limit - 300) notifyWarning("تبقّى 5 دقائق من وقت الهاتف")
-        if (before < limit - 60 && after >= limit - 60) notifyWarning("تبقّت دقيقة واحدة من وقت الهاتف")
+        val elapsedSeconds = ((now - previousAnchor) / 1000L).toInt().coerceAtLeast(0)
+        applyElapsedUsage(elapsedSeconds, "USAGE_ACCOUNTED", "ticker")
     }
 
     private fun resetIfNewDay() {
@@ -949,7 +1047,7 @@ class MonitorService : Service() {
         prefs.edit().putString("date", currentDate).putInt("used_seconds", 0)
             .remove("unlocked_date").remove(LAST_TICK_KEY).commit()
         overlayWarningRecorded = false
-        resetClockAnchor()
+        resetClockAnchor("new_day")
     }
 
     private fun isTimeFinished(): Boolean {
@@ -1616,6 +1714,80 @@ class UninstallPinActivity : Activity() {
     }
 }
 
+class ForceStopPinActivity : Activity() {
+    private val prefs by lazy { guardPrefs() }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+
+        val pin = EditText(this).apply {
+            hint = "رمز الأب من 6 أرقام"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            maxLines = 1
+        }
+        val status = TextView(this).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.RED)
+        }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(42, 42, 42, 42)
+            addView(TextView(this@ForceStopPinActivity).apply {
+                text = "إدارة KidsMonnter محمية برمز الأب"
+                textSize = 24f
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(-1, -2))
+            addView(TextView(this@ForceStopPinActivity).apply {
+                text = "يلزم رمز الأب قبل فتح صفحة الإيقاف الإجباري أو إزالة الحماية."
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 12 })
+            addView(pin, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 24 })
+            addView(status, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 12 })
+            addView(Button(this@ForceStopPinActivity).apply {
+                text = "السماح بإدارة التطبيق"
+                setOnClickListener {
+                    val remaining = lockPinBlockRemainingMs(prefs)
+                    if (remaining > 0L) {
+                        status.text = lockDelayText(remaining)
+                        return@setOnClickListener
+                    }
+                    val candidate = pin.text.toString().trim()
+                    if (!verifyPin(prefs, candidate)) {
+                        val delay = registerLockPinFailure(
+                            this@ForceStopPinActivity,
+                            prefs,
+                            "محاولة فتح الإيقاف الإجباري دون رمز صحيح",
+                        )
+                        status.text = "رمز الأب غير صحيح. ${lockDelayText(delay)}"
+                        pin.text.clear()
+                        return@setOnClickListener
+                    }
+                    clearLockPinFailureState(prefs)
+                    if (!prefs.authorizeParentAppSettings()) {
+                        status.text = "تعذر حفظ السماح المؤقت. حاول مرة أخرى."
+                        return@setOnClickListener
+                    }
+                    appendGuardLog("APP_SETTINGS_AUTHORIZED_BY_PARENT_PIN", "windowMs=$SETTINGS_AUTH_WINDOW_MS")
+                    startActivity(
+                        Intent(
+                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:$packageName"),
+                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                    )
+                    finish()
+                }
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 18 })
+            addView(Button(this@ForceStopPinActivity).apply {
+                text = "رجوع"
+                setOnClickListener { finish() }
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 10 })
+        }
+        setContentView(root)
+    }
+}
+
 class UninstallGuardAccessibilityService : AccessibilityService() {
     private val protectedPackages = setOf(
         "com.android.settings",
@@ -1623,51 +1795,110 @@ class UninstallGuardAccessibilityService : AccessibilityService() {
         "com.google.android.packageinstaller",
         "com.android.permissioncontroller",
         "com.google.android.permissioncontroller",
+        "com.huawei.systemmanager",
     )
+    private var lastGateLaunchElapsedMs = 0L
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        event ?: return
-        val prefs = guardPrefs()
-        if (!hasStoredPin(prefs) || prefs.isParentUninstallAuthorized()) return
-
-        val sourcePackage = event.packageName?.toString().orEmpty()
-        if (sourcePackage !in protectedPackages) return
-
-        val className = event.className?.toString().orEmpty()
-        val visibleText = buildString {
-            append(event.text.joinToString(" "))
-            append(' ')
-            append(event.contentDescription?.toString().orEmpty())
+    private fun collectVisibleText(root: AccessibilityNodeInfo?): String {
+        root ?: return ""
+        val output = StringBuilder()
+        fun visit(node: AccessibilityNodeInfo?, depth: Int) {
+            if (node == null || depth > 18 || output.length > 12000) return
+            node.text?.toString()?.takeIf { it.isNotBlank() }?.let {
+                output.append(' ').append(it)
+            }
+            node.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let {
+                output.append(' ').append(it)
+            }
+            for (index in 0 until node.childCount) visit(node.getChild(index), depth + 1)
         }
-        val mentionsThisApp = visibleText.contains("حارس وقت الأطفال", ignoreCase = true) ||
-            visibleText.contains("KidsMonnter", ignoreCase = true) ||
-            visibleText.contains(packageName, ignoreCase = true)
-        val sensitiveClass = listOf(
-            "UninstallerActivity",
-            "UninstallActivity",
-            "InstalledAppDetails",
-            "DeviceAdminSettings",
-            "DeviceAdminAdd",
-            "ManageApplications",
-        ).any { className.contains(it, ignoreCase = true) }
-        val deviceAdminScreen = className.contains("DeviceAdmin", ignoreCase = true)
+        visit(root, 0)
+        return output.toString()
+    }
 
-        if (!mentionsThisApp && !deviceAdminScreen && !sensitiveClass) return
+    private fun textMentionsKidsMonnter(text: String): Boolean =
+        text.contains("حارس وقت الأطفال", ignoreCase = true) ||
+            text.contains("KidsMonnter", ignoreCase = true) ||
+            text.contains(packageName, ignoreCase = true)
+
+    private fun launchParentGate(activityClass: Class<out Activity>, eventName: String, details: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastGateLaunchElapsedMs < 1200L) return
+        lastGateLaunchElapsedMs = now
         performGlobalAction(GLOBAL_ACTION_BACK)
         try {
             startActivity(
-                Intent(this, UninstallPinActivity::class.java).addFlags(
+                Intent(this, activityClass).addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK or
                         Intent.FLAG_ACTIVITY_CLEAR_TOP or
                         Intent.FLAG_ACTIVITY_SINGLE_TOP,
                 ),
             )
-            appendGuardLog(
+            appendGuardLog(eventName, details)
+        } catch (error: Exception) {
+            appendGuardLog("PARENT_SECURITY_GATE_LAUNCH_FAILED", details, error)
+        }
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        event ?: return
+        val prefs = guardPrefs()
+        if (!hasStoredPin(prefs)) return
+
+        val sourcePackage = event.packageName?.toString().orEmpty()
+        if (sourcePackage !in protectedPackages) return
+
+        val className = event.className?.toString().orEmpty()
+        val eventText = buildString {
+            append(event.text.joinToString(" "))
+            append(' ')
+            append(event.contentDescription?.toString().orEmpty())
+        }
+        val rootText = collectVisibleText(rootInActiveWindow)
+        val visibleText = "$eventText $rootText"
+        val mentionsThisApp = textMentionsKidsMonnter(visibleText)
+        if (!mentionsThisApp) return
+
+        val appDetailsScreen = listOf(
+            "InstalledAppDetails",
+            "AppInfo",
+            "AppDetails",
+            "ApplicationInfo",
+        ).any { className.contains(it, ignoreCase = true) }
+        val forceStopText = listOf(
+            "force stop",
+            "force-stop",
+            "إيقاف إجباري",
+            "فرض الإيقاف",
+            "ايقاف اجباري",
+            "إيقاف بالقوة",
+        ).any { visibleText.contains(it, ignoreCase = true) }
+        val uninstallScreen = listOf(
+            "UninstallerActivity",
+            "UninstallActivity",
+            "PackageInstallerActivity",
+        ).any { className.contains(it, ignoreCase = true) } ||
+            listOf("uninstall", "إلغاء التثبيت", "ازالة التطبيق", "إزالة التطبيق")
+                .any { visibleText.contains(it, ignoreCase = true) }
+        val destructiveAdminScreen = className.contains("DeviceAdmin", ignoreCase = true) &&
+            listOf("deactivate", "disable", "إلغاء التنشيط", "تعطيل")
+                .any { visibleText.contains(it, ignoreCase = true) }
+
+        if (prefs.isParentAppSettingsAuthorized()) return
+        if (uninstallScreen && !prefs.isParentUninstallAuthorized()) {
+            launchParentGate(
+                UninstallPinActivity::class.java,
                 "UNINSTALL_ATTEMPT_INTERCEPTED",
                 "package=$sourcePackage class=$className",
             )
-        } catch (error: Exception) {
-            appendGuardLog("UNINSTALL_GUARD_LAUNCH_FAILED", error = error)
+            return
+        }
+        if (appDetailsScreen || forceStopText || destructiveAdminScreen) {
+            launchParentGate(
+                ForceStopPinActivity::class.java,
+                "FORCE_STOP_OR_APP_SETTINGS_INTERCEPTED",
+                "package=$sourcePackage class=$className forceStop=$forceStopText",
+            )
         }
     }
 

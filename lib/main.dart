@@ -484,11 +484,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           return;
         }
 
-        final wasEnabled = _status?.enabled == true;
-        await _channel.invokeMethod('startProtection', {'minutes': minutes});
-        if (!wasEnabled) {
-          await _channel.invokeMethod('stopProtection', {'pin': pin});
-        }
+        // DURATION_WITHOUT_PROTECTION_TOGGLE_MARKER
+        await _channel.invokeMethod('setDailyMinutes', {
+          'pin': pin,
+          'minutes': minutes,
+        });
         await _refreshStatus();
         _showMessage('تم اعتماد ${_durationLabel(minutes)} يوميًا.');
       } on PlatformException catch (error) {
