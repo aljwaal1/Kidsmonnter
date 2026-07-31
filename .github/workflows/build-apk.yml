@@ -60,7 +60,7 @@ jobs:
       - name: Generate Android project
         run: flutter create --platforms=android --org com.explapp --no-pub .
 
-      - name: Prepare final sources without Device Admin
+      - name: Prepare final sources without Device Admin or mandatory Overlay
         run: |
           set -e
           python3 - <<'PY'
@@ -94,7 +94,6 @@ jobs:
           kotlin_path = Path('native/MainActivityV2.kt')
           kotlin = kotlin_path.read_text(encoding='utf-8')
 
-          # لا تجعل تشغيل الحماية يعتمد على Device Admin أو خدمة Accessibility المحذوفة.
           kotlin = re.sub(
               r'\s*// MANDATORY_DEVICE_OWNER_SETUP_MARKER\s*val missing = mutableListOf<String>\(\)\s*// MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER\s*val dpm = getSystemService\(Context\.DEVICE_POLICY_SERVICE\) as DevicePolicyManager\s*val admin = ComponentName\(this, KidsMonnterDeviceAdminReceiver::class\.java\)\s*if \(!dpm\.isAdminActive\(admin\)\) missing\.add\("device_admin"\)\s*if \(!isUninstallGuardAccessibilityEnabled\(\)\) missing\.add\("uninstall_guard"\)',
               '\n                    val missing = mutableListOf<String>()\n                    // Device Admin and uninstall Accessibility are not required in this build.',
@@ -103,7 +102,13 @@ jobs:
               flags=re.S,
           )
 
-          # لا تحاول تطبيق سياسات Device Owner عند فتح التطبيق أو بدء الحماية.
+          # أجهزة Huawei/Android القديمة قد لا تعرض صفحة Overlay؛ لذلك لا نجعلها شرطًا للتشغيل.
+          kotlin = kotlin.replace(
+              '                    if (!Settings.canDrawOverlays(this)) missing.add("overlay")\n',
+              '                    // Overlay is optional; legacy Android uses the lock Activity fallback.\n',
+              1,
+          )
+
           kotlin = kotlin.replace(
               '        ensureUninstallProtection()\n        MethodChannel(',
               '        // Device Owner protection removed from this build.\n        MethodChannel(',
@@ -122,6 +127,7 @@ jobs:
               'runtime gate': 'FINAL_BUILD_SETUP_READY' in main,
               'device admin requirement': 'missing.add("device_admin")' not in kotlin,
               'uninstall guard requirement': 'missing.add("uninstall_guard")' not in kotlin,
+              'overlay requirement': 'missing.add("overlay")' not in kotlin,
           }
           failed = [name for name, ok in checks.items() if not ok]
           if failed:
@@ -188,5 +194,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add apk/KidsMonnter.apk apk/KidsMonnter-cert.txt apk/KidsMonnter.sha256 DOWNLOAD_APK.md
-          git diff --cached --quiet || git commit -m "بناء KidsMonnter APK يعمل بدون Device Admin"
+          git diff --cached --quiet || git commit -m "بناء KidsMonnter APK بدون صلاحية Overlay إجبارية"
           git push origin HEAD:main
