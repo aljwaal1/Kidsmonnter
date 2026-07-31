@@ -90,7 +90,6 @@ jobs:
 
           main_path = Path('lib/main.dart')
           main = main_path.read_text(encoding='utf-8')
-
           setup_pattern = re.compile(
               r'bool get _runtimeSetupReady =>\s*'
               r'\(_status\?\.overlayAllowed == true\)\s*&&\s*'
@@ -107,25 +106,34 @@ jobs:
           if count != 1 and 'PLAY_PROTECT_COMPATIBLE_SETUP_MARKER' not in main:
               raise SystemExit('Could not update runtime setup gate')
 
-          # Remove the visible Device Owner / complete uninstall protection tile.
-          main, ui_count = re.subn(
-              r'\n\s*// DEFAULT_UNINSTALL_PROTECTION_UI_MARKER.*?\n\s*const Divider\(height: 24\),',
+          # Remove the complete Device Owner tile, including its tap handler.
+          device_owner_ui = re.compile(
+              r'\n\s*// DEFAULT_UNINSTALL_PROTECTION_UI_MARKER\s*'
+              r'.*?onTap:\s*_busy\s*\|\|\s*_devicePolicy\.uninstallProtectionActive\s*'
+              r'\?\s*null\s*:\s*_showDeviceOwnerInstructions,\s*'
+              r'\),\s*const Divider\(height:\s*24\),',
+              flags=re.S,
+          )
+          main, ui_count = device_owner_ui.subn(
               '\n            const Divider(height: 24),',
               main,
               count=1,
-              flags=re.S,
           )
-          if ui_count != 1 and 'DEFAULT_UNINSTALL_PROTECTION_UI_MARKER' in main:
-              raise SystemExit('Could not remove Device Owner UI')
+          if ui_count != 1:
+              raise SystemExit('Could not remove complete Device Owner UI block')
 
           main_path.write_text(main, encoding='utf-8')
 
-          if 'android:name=".UninstallGuardAccessibilityService"' in manifest:
-              raise SystemExit('Accessibility service still exists in manifest')
-          if 'android:name=".KidsMonnterDeviceAdminReceiver"' in manifest:
-              raise SystemExit('Device administrator still exists in manifest')
-          if 'DEFAULT_UNINSTALL_PROTECTION_UI_MARKER' in main:
-              raise SystemExit('Device Owner UI still exists')
+          forbidden = [
+              'android:name=".UninstallGuardAccessibilityService"',
+              'android:name=".KidsMonnterDeviceAdminReceiver"',
+              'DEFAULT_UNINSTALL_PROTECTION_UI_MARKER',
+              'تفعيل منع الحذف الكامل',
+              'adb shell dpm set-device-owner',
+          ]
+          for value in forbidden:
+              if value in manifest or value in main:
+                  raise SystemExit(f'Forbidden final-build content remains: {value}')
           PY
 
       - name: Install native Android implementation
@@ -142,8 +150,10 @@ jobs:
       - name: Install packages
         run: flutter pub get
 
-      - name: Analyze application
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - name: Format and analyze application
+        run: |
+          dart format lib
+          flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Build release APK
         run: flutter build apk --release
@@ -165,7 +175,7 @@ jobs:
             "$INPUT_APK"
           "$APKSIGNER" verify --verbose --print-certs dist/KidsMonnter.apk | tee dist/KidsMonnter-cert.txt
           grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' dist/KidsMonnter-cert.txt
-          sha256sum dist/KidsMonnter.apk | tee dist/KidsMonnter.sha256
+          sha256sum dist/KidsMonnter.apk | sed 's#dist/KidsMonnter.apk#KidsMonnter.apk#' | tee dist/KidsMonnter.sha256
           test -s dist/KidsMonnter.apk
 
       - name: Upload final APK artifact
@@ -188,5 +198,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add apk/KidsMonnter.apk apk/KidsMonnter-cert.txt apk/KidsMonnter.sha256 DOWNLOAD_APK.md
-          git diff --cached --quiet || git commit -m "بناء KidsMonnter النهائي بدون واجهة Device Owner"
+          git diff --cached --quiet || git commit -m "بناء KidsMonnter النهائي بدون Device Owner"
           git push origin HEAD:main
