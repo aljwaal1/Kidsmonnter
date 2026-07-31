@@ -60,7 +60,7 @@ jobs:
       - name: Generate Android project
         run: flutter create --platforms=android --org com.explapp --no-pub .
 
-      - name: Remove Device Owner and Accessibility UI
+      - name: Prepare final sources without Device Admin
         run: |
           set -e
           python3 - <<'PY'
@@ -69,54 +69,63 @@ jobs:
 
           manifest_path = Path('native/AndroidManifest.xml')
           manifest = manifest_path.read_text(encoding='utf-8')
-          manifest = re.sub(
-              r'\s*<receiver\s+android:name="\.KidsMonnterDeviceAdminReceiver".*?</receiver>',
-              '', manifest, flags=re.S,
-          )
-          manifest = re.sub(
-              r'\s*<service\s+android:name="\.UninstallGuardAccessibilityService".*?</service>',
-              '', manifest, flags=re.S,
-          )
+          manifest = re.sub(r'\s*<receiver\s+android:name="\.KidsMonnterDeviceAdminReceiver".*?</receiver>', '', manifest, flags=re.S)
+          manifest = re.sub(r'\s*<service\s+android:name="\.UninstallGuardAccessibilityService".*?</service>', '', manifest, flags=re.S)
           manifest_path.write_text(manifest, encoding='utf-8')
 
           main_path = Path('lib/main.dart')
           main = main_path.read_text(encoding='utf-8')
-
-          main, runtime_count = re.subn(
+          main = re.sub(
               r'bool get _runtimeSetupReady =>.*?;\s*// MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER',
               'bool get _runtimeSetupReady => true; // FINAL_BUILD_SETUP_READY',
               main,
               count=1,
               flags=re.S,
           )
-
-          main, ui_count = re.subn(
-              r'\s*// DEFAULT_UNINSTALL_PROTECTION_UI_MARKER.*?'
-              r'(?=\s*Card\(\s*child:\s*ListTile\(\s*leading:\s*Icon\(status\.hasPin)',
-              '\n            // DEVICE_OWNER_UI_REMOVED\n',
+          main = re.sub(
+              r'\s*// DEFAULT_UNINSTALL_PROTECTION_UI_MARKER.*?const Divider\(height: 24\),',
+              '\n            // Device Admin UI removed from final build\n            const Divider(height: 24),',
               main,
               count=1,
               flags=re.S,
           )
-
           main_path.write_text(main, encoding='utf-8')
 
-          failures = []
-          if 'KidsMonnterDeviceAdminReceiver' in manifest:
-              failures.append('Device Admin receiver remains in manifest')
-          if 'UninstallGuardAccessibilityService' in manifest:
-              failures.append('Accessibility service remains in manifest')
-          if runtime_count != 1 or 'FINAL_BUILD_SETUP_READY' not in main:
-              failures.append('Runtime setup gate was not bypassed')
-          if ui_count != 1 or 'DEVICE_OWNER_UI_REMOVED' not in main:
-              failures.append('Device Owner UI block was not removed')
-          if 'منع الحذف يحتاج إعداد الجهاز مرة واحدة' in main:
-              failures.append('Old Device Owner message remains in visible UI')
-          if 'DEFAULT_UNINSTALL_PROTECTION_UI_MARKER' in main:
-              failures.append('Old uninstall protection UI marker remains')
+          kotlin_path = Path('native/MainActivityV2.kt')
+          kotlin = kotlin_path.read_text(encoding='utf-8')
 
-          if failures:
-              raise SystemExit('\n'.join(failures))
+          # لا تجعل تشغيل الحماية يعتمد على Device Admin أو خدمة Accessibility المحذوفة.
+          kotlin = re.sub(
+              r'\s*// MANDATORY_DEVICE_OWNER_SETUP_MARKER\s*val missing = mutableListOf<String>\(\)\s*// MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER\s*val dpm = getSystemService\(Context\.DEVICE_POLICY_SERVICE\) as DevicePolicyManager\s*val admin = ComponentName\(this, KidsMonnterDeviceAdminReceiver::class\.java\)\s*if \(!dpm\.isAdminActive\(admin\)\) missing\.add\("device_admin"\)\s*if \(!isUninstallGuardAccessibilityEnabled\(\)\) missing\.add\("uninstall_guard"\)',
+              '\n                    val missing = mutableListOf<String>()\n                    // Device Admin and uninstall Accessibility are not required in this build.',
+              kotlin,
+              count=1,
+              flags=re.S,
+          )
+
+          # لا تحاول تطبيق سياسات Device Owner عند فتح التطبيق أو بدء الحماية.
+          kotlin = kotlin.replace(
+              '        ensureUninstallProtection()\n        MethodChannel(',
+              '        // Device Owner protection removed from this build.\n        MethodChannel(',
+              1,
+          )
+          kotlin = kotlin.replace(
+              '                    ensureUninstallProtection()\n                    appendGuardLog("PROTECTION_ENABLED"',
+              '                    appendGuardLog("PROTECTION_ENABLED"',
+              1,
+          )
+          kotlin_path.write_text(kotlin, encoding='utf-8')
+
+          checks = {
+              'manifest device admin': 'KidsMonnterDeviceAdminReceiver' not in manifest,
+              'manifest accessibility': 'UninstallGuardAccessibilityService' not in manifest,
+              'runtime gate': 'FINAL_BUILD_SETUP_READY' in main,
+              'device admin requirement': 'missing.add("device_admin")' not in kotlin,
+              'uninstall guard requirement': 'missing.add("uninstall_guard")' not in kotlin,
+          }
+          failed = [name for name, ok in checks.items() if not ok]
+          if failed:
+              raise SystemExit('Final source preparation failed: ' + ', '.join(failed))
           PY
 
       - name: Install native Android implementation
@@ -179,5 +188,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add apk/KidsMonnter.apk apk/KidsMonnter-cert.txt apk/KidsMonnter.sha256 DOWNLOAD_APK.md
-          git diff --cached --quiet || git commit -m "بناء KidsMonnter APK بدون Device Owner"
+          git diff --cached --quiet || git commit -m "بناء KidsMonnter APK يعمل بدون Device Admin"
           git push origin HEAD:main
