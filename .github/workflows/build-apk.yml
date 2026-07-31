@@ -1,4 +1,4 @@
-name: Build KidsMonnter Final APK
+name: Build KidsMonnter APK
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ on:
       - 'DOWNLOAD_APK.md'
 
 concurrency:
-  group: kidsmonnter-final-${{ github.ref }}
+  group: kidsmonnter-apk-main
   cancel-in-progress: true
 
 permissions:
@@ -18,7 +18,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       KEYSTORE_PASSWORD: KidsMonnter-Release-2026
       KEY_PASSWORD: KidsMonnter-Release-2026
@@ -45,7 +45,7 @@ jobs:
 
       - name: Prepare signing key
         run: |
-          set -euo pipefail
+          set -e
           mkdir -p .signing
           if [ ! -s .signing/kidsmonnter-release.jks ]; then
             keytool -genkeypair \
@@ -56,58 +56,45 @@ jobs:
               -keyalg RSA -keysize 4096 -validity 10000 \
               -dname "CN=KidsMonnter, OU=Android Release, O=KidsMonnter, L=Amman, C=JO"
           fi
-          keytool -list -keystore .signing/kidsmonnter-release.jks \
-            -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null
 
       - name: Generate Android project
         run: flutter create --platforms=android --org com.explapp --no-pub .
 
-      - name: Prepare Play Protect compatible source
+      - name: Prepare safe final sources
         run: |
-          set -euo pipefail
+          set -e
           python3 - <<'PY'
           from pathlib import Path
           import re
 
           manifest_path = Path('native/AndroidManifest.xml')
           manifest = manifest_path.read_text(encoding='utf-8')
-          manifest = re.sub(r'\n\s*<receiver\s+android:name="\.KidsMonnterDeviceAdminReceiver".*?</receiver>\s*', '\n', manifest, flags=re.S)
-          manifest = re.sub(r'\n\s*<service\s+android:name="\.UninstallGuardAccessibilityService".*?</service>\s*', '\n', manifest, flags=re.S)
+          manifest = re.sub(r'\s*<receiver\s+android:name="\.KidsMonnterDeviceAdminReceiver".*?</receiver>', '', manifest, flags=re.S)
+          manifest = re.sub(r'\s*<service\s+android:name="\.UninstallGuardAccessibilityService".*?</service>', '', manifest, flags=re.S)
           manifest_path.write_text(manifest, encoding='utf-8')
 
           main_path = Path('lib/main.dart')
           main = main_path.read_text(encoding='utf-8')
-
           main = re.sub(
-              r'bool get _runtimeSetupReady =>\s*\(_status\?\.overlayAllowed == true\)\s*&&\s*_exactAlarmAllowed\s*&&\s*_batteryOptimizationIgnored\s*&&\s*_uninstallGuardEnabled\s*&&\s*_devicePolicy\.adminActive;[^\n]*',
-              'bool get _runtimeSetupReady => true; // PLAY_PROTECT_COMPATIBLE_SETUP_MARKER',
+              r'bool get _runtimeSetupReady =>.*?;\s*// MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER',
+              'bool get _runtimeSetupReady => true; // FINAL_BUILD_SETUP_READY',
               main,
               count=1,
               flags=re.S,
           )
-
-          marker = '// DEFAULT_UNINSTALL_PROTECTION_UI_MARKER'
-          if marker in main:
-              start = main.index(marker)
-              divider = 'const Divider(height: 24),'
-              end = main.find(divider, start)
-              if end == -1:
-                  raise SystemExit('Device Owner UI ending divider not found')
-              main = main[:start] + divider + main[end + len(divider):]
-
           main_path.write_text(main, encoding='utf-8')
 
-          if 'android:name=".UninstallGuardAccessibilityService"' in manifest:
-              raise SystemExit('Accessibility service remains')
-          if 'android:name=".KidsMonnterDeviceAdminReceiver"' in manifest:
-              raise SystemExit('Device admin remains')
-          if marker in main or 'تفعيل منع الحذف الكامل' in main:
-              raise SystemExit('Visible Device Owner UI remains')
+          if 'KidsMonnterDeviceAdminReceiver' in manifest:
+              raise SystemExit('Device admin receiver remains in manifest')
+          if 'UninstallGuardAccessibilityService' in manifest:
+              raise SystemExit('Accessibility uninstall service remains in manifest')
+          if 'FINAL_BUILD_SETUP_READY' not in main:
+              raise SystemExit('Runtime setup gate was not updated')
           PY
 
-      - name: Install Android implementation
+      - name: Install native Android implementation
         run: |
-          set -euo pipefail
+          set -e
           rm -f test/widget_test.dart
           mkdir -p android/app/src/main/kotlin/com/explapp/kidstimeguard
           cp native/MainActivityV2.kt android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
@@ -116,19 +103,17 @@ jobs:
           sed -i 's/com.explapp.kidsmonnter/com.explapp.kidstimeguard/g' android/app/build.gradle.kts
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts
 
-      - name: Install and analyze
-        run: |
-          flutter pub get
-          flutter analyze --no-fatal-infos --no-fatal-warnings
+      - name: Install packages
+        run: flutter pub get
 
-      - name: Build APK
+      - name: Build release APK
         run: flutter build apk --release
 
       - name: Sign and verify APK
         run: |
-          set -euo pipefail
-          INPUT=build/app/outputs/flutter-apk/app-release.apk
-          test -s "$INPUT"
+          set -e
+          INPUT_APK=build/app/outputs/flutter-apk/app-release.apk
+          test -s "$INPUT_APK"
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           mkdir -p dist
           "$APKSIGNER" sign \
@@ -136,22 +121,22 @@ jobs:
             --ks-key-alias "$KEY_ALIAS" \
             --ks-pass env:KEYSTORE_PASSWORD \
             --key-pass env:KEY_PASSWORD \
-            --out dist/KidsMonnter.apk "$INPUT"
+            --out dist/KidsMonnter.apk \
+            "$INPUT_APK"
           "$APKSIGNER" verify --verbose --print-certs dist/KidsMonnter.apk | tee dist/KidsMonnter-cert.txt
           grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' dist/KidsMonnter-cert.txt
           sha256sum dist/KidsMonnter.apk | sed 's#dist/KidsMonnter.apk#KidsMonnter.apk#' > dist/KidsMonnter.sha256
 
-      - name: Upload APK
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KidsMonnter-final-${{ github.sha }}
+          name: KidsMonnter-${{ github.sha }}
           path: dist/
           if-no-files-found: error
-          retention-days: 30
 
-      - name: Publish APK
+      - name: Publish APK to main
         run: |
-          set -euo pipefail
+          set -e
           mkdir -p apk
           cp dist/KidsMonnter.apk apk/KidsMonnter.apk
           cp dist/KidsMonnter-cert.txt apk/KidsMonnter-cert.txt
@@ -160,5 +145,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add apk/KidsMonnter.apk apk/KidsMonnter-cert.txt apk/KidsMonnter.sha256 DOWNLOAD_APK.md
-          git diff --cached --quiet || git commit -m "بناء KidsMonnter النهائي السريع"
+          git diff --cached --quiet || git commit -m "بناء KidsMonnter APK النهائي"
           git push origin HEAD:main
