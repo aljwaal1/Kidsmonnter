@@ -100,11 +100,18 @@ jobs:
           cp native/MainActivityV2.kt android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
           cp native/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
           rm -rf android/app/src/main/kotlin/com/explapp/kidsmonnter
+          rm -f android/app/src/main/res/xml/uninstall_guard_accessibility.xml
+          rm -f android/app/src/main/res/xml/device_admin_receiver.xml
           sed -i 's/com.explapp.kidsmonnter/com.explapp.kidstimeguard/g' android/app/build.gradle.kts
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts
 
       - name: Install packages
         run: flutter pub get
+
+      - name: Clean Gradle state
+        run: |
+          flutter clean
+          rm -rf android/.gradle
 
       - name: Build release APK
         run: flutter build apk --release
