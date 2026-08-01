@@ -60,9 +60,9 @@ jobs:
       - name: Generate Android project
         run: flutter create --platforms=android --org com.explapp --no-pub .
 
-      - name: Prepare parental uninstall guard sources
+      - name: Prepare hardened parental uninstall guard
         run: |
-          set -e
+          set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
           import re
@@ -72,6 +72,10 @@ jobs:
           manifest = re.sub(
               r'\s*<receiver\s+android:name="\.KidsMonnterDeviceAdminReceiver".*?</receiver>',
               '', manifest, flags=re.S,
+          )
+          manifest = re.sub(
+              r'(<service\s+android:name="\.UninstallGuardAccessibilityService".*?android:exported=")false(".*?</service>)',
+              r'\1true\2', manifest, count=1, flags=re.S,
           )
           manifest_path.write_text(manifest, encoding='utf-8')
 
@@ -100,8 +104,8 @@ jobs:
                 ),
                 subtitle: Text(
                   _uninstallGuardEnabled
-                      ? 'سيُطلب رمز ولي الأمر عند محاولة فتح شاشة حذف التطبيق أو إيقافه.'
-                      : 'اضغط للتفعيل، ثم اختر «حارس وقت الأطفال» من خدمات إمكانية الوصول.',
+                      ? 'الحذف ومعلومات التطبيق وتعطيل خدمة الحماية محمية برمز ولي الأمر.'
+                      : 'تراقب الخدمة شاشات النظام المرتبطة بحذف KidsMonnter فقط، ولا ترسل محتوى الشاشة خارج الجهاز.',
                 ),
                 trailing: _uninstallGuardEnabled
                     ? const Icon(Icons.check_circle, color: Colors.green)
@@ -109,7 +113,7 @@ jobs:
                         onPressed: _busy
                             ? null
                             : () => _channel.invokeMethod<void>('openAccessibilitySettings'),
-                        child: const Text('تفعيل'),
+                        child: const Text('موافق وتفعيل'),
                       ),
                 onTap: _uninstallGuardEnabled || _busy
                     ? null
@@ -131,7 +135,7 @@ jobs:
           kotlin = kotlin_path.read_text(encoding='utf-8')
           kotlin = re.sub(
               r'\s*// MANDATORY_DEVICE_OWNER_SETUP_MARKER\s*val missing = mutableListOf<String>\(\)\s*// MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER\s*val dpm = getSystemService\(Context\.DEVICE_POLICY_SERVICE\) as DevicePolicyManager\s*val admin = ComponentName\(this, KidsMonnterDeviceAdminReceiver::class\.java\)\s*if \(!dpm\.isAdminActive\(admin\)\) missing\.add\("device_admin"\)',
-              '\n                    val missing = mutableListOf<String>()\n                    // Device Admin is not used; Accessibility uninstall guard remains required.',
+              '\n                    val missing = mutableListOf<String>()\n                    // Device Admin is intentionally not used. Accessibility guard is required.',
               kotlin,
               count=1,
               flags=re.S,
@@ -146,21 +150,84 @@ jobs:
               '                    appendGuardLog("PROTECTION_ENABLED"',
               1,
           )
-          # Overlay is optional on older devices, but Accessibility guard is mandatory.
           kotlin = kotlin.replace(
               '                    if (!Settings.canDrawOverlays(this)) missing.add("overlay")\n',
               '',
           )
+
+          # Protect the Accessibility settings page itself so the child cannot disable the guard first.
+          old_detection = '''        val destructiveAdminScreen = className.contains("DeviceAdmin", ignoreCase = true) &&
+            listOf("deactivate", "disable", "إلغاء التنشيط", "تعطيل")
+                .any { visibleText.contains(it, ignoreCase = true) }
+
+        if (prefs.isParentAppSettingsAuthorized()) return
+        if (uninstallScreen && !prefs.isParentUninstallAuthorized()) {'''
+          new_detection = '''        val destructiveAdminScreen = className.contains("DeviceAdmin", ignoreCase = true) &&
+            listOf("deactivate", "disable", "إلغاء التنشيط", "تعطيل")
+                .any { visibleText.contains(it, ignoreCase = true) }
+        val accessibilitySettingsScreen = listOf(
+            "AccessibilitySettings",
+            "AccessibilityService",
+            "InstalledAccessibilityService",
+            "ToggleAccessibilityServicePreferenceFragment",
+            "AccessibilityDetailsSettingsFragment",
+        ).any { className.contains(it, ignoreCase = true) } ||
+            listOf(
+                "accessibility",
+                "إمكانية الوصول",
+                "تسهيلات الاستخدام",
+                "الخدمات المثبتة",
+                "installed services",
+            ).any { visibleText.contains(it, ignoreCase = true) }
+
+        if (prefs.isParentAppSettingsAuthorized()) return
+        if (accessibilitySettingsScreen) {
+            launchParentGate(
+                ForceStopPinActivity::class.java,
+                "ACCESSIBILITY_GUARD_SETTINGS_INTERCEPTED",
+                "package=$sourcePackage class=$className",
+            )
+            return
+        }
+        if (uninstallScreen && !prefs.isParentUninstallAuthorized()) {'''
+          if old_detection not in kotlin:
+              raise SystemExit('Expected uninstall guard detection block was not found')
+          kotlin = kotlin.replace(old_detection, new_detection, 1)
+
+          # Log service connection so real-device diagnostics can confirm that Android bound the service.
+          old_interrupt = '    override fun onInterrupt() = Unit\n}'
+          new_interrupt = '''    override fun onServiceConnected() {
+        super.onServiceConnected()
+        appendGuardLog(
+            "UNINSTALL_GUARD_CONNECTED",
+            "sdk=${Build.VERSION.SDK_INT} manufacturer=${Build.MANUFACTURER} model=${Build.MODEL}",
+        )
+    }
+
+    override fun onInterrupt() {
+        appendGuardLog("UNINSTALL_GUARD_INTERRUPTED")
+    }
+}'''
+          if old_interrupt not in kotlin:
+              raise SystemExit('Expected AccessibilityService ending was not found')
+          kotlin = kotlin.replace(old_interrupt, new_interrupt, 1)
           kotlin_path.write_text(kotlin, encoding='utf-8')
 
           checks = {
               'device admin removed from manifest': 'KidsMonnterDeviceAdminReceiver' not in manifest,
               'accessibility service retained': 'UninstallGuardAccessibilityService' in manifest,
+              'accessibility service exported': 'android:exported="true"' in manifest,
               'runtime gate bypassed': 'FINAL_BUILD_SETUP_READY' in main,
               'activation card added': 'فعّل حماية حذف التطبيق' in main,
               'device admin requirement removed': 'missing.add("device_admin")' not in kotlin,
               'uninstall guard requirement retained': 'missing.add("uninstall_guard")' in kotlin,
               'overlay requirement removed': 'missing.add("overlay")' not in kotlin,
+              'accessibility settings protected': 'ACCESSIBILITY_GUARD_SETTINGS_INTERCEPTED' in kotlin,
+              'service connection logged': 'UNINSTALL_GUARD_CONNECTED' in kotlin,
+              'safe-mode style guard classes present': all(x in kotlin for x in (
+                  'UninstallPinActivity', 'ForceStopPinActivity',
+                  'UninstallGuardAccessibilityService', 'GLOBAL_ACTION_BACK',
+              )),
           }
           failed = [name for name, ok in checks.items() if not ok]
           if failed:
@@ -169,7 +236,7 @@ jobs:
 
       - name: Install native Android implementation
         run: |
-          set -e
+          set -euo pipefail
           rm -f test/widget_test.dart
           mkdir -p android/app/src/main/kotlin/com/explapp/kidstimeguard
           cp native/MainActivityV2.kt android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
@@ -180,17 +247,17 @@ jobs:
           cat > android/app/src/main/res/xml/uninstall_guard_accessibility.xml <<'XML'
           <?xml version="1.0" encoding="utf-8"?>
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewClicked|typeViewSelected"
               android:accessibilityFeedbackType="feedbackGeneric"
-              android:accessibilityFlags="flagReportViewIds"
+              android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
               android:canRetrieveWindowContent="true"
               android:description="@string/uninstall_guard_description"
-              android:notificationTimeout="50" />
+              android:notificationTimeout="80" />
           XML
           cat > android/app/src/main/res/values/kidsmonnter_strings.xml <<'XML'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <string name="uninstall_guard_description">تحمي هذه الخدمة إعدادات التطبيق من الحذف أو الإيقاف دون رمز ولي الأمر.</string>
+              <string name="uninstall_guard_description">تراقب هذه الخدمة شاشات النظام الخاصة بحذف KidsMonnter أو تعطيله، وتطلب رمز ولي الأمر. لا ترسل محتوى الشاشة خارج الجهاز.</string>
           </resources>
           XML
           sed -i 's/com.explapp.kidsmonnter/com.explapp.kidstimeguard/g' android/app/build.gradle.kts
@@ -198,6 +265,17 @@ jobs:
 
       - name: Install packages
         run: flutter pub get
+
+      - name: Verify prepared sources
+        run: |
+          set -euo pipefail
+          grep -q 'android:exported="true"' android/app/src/main/AndroidManifest.xml
+          grep -q 'UninstallGuardAccessibilityService' android/app/src/main/AndroidManifest.xml
+          grep -q 'ACCESSIBILITY_GUARD_SETTINGS_INTERCEPTED' android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
+          grep -q 'UNINSTALL_GUARD_CONNECTED' android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
+          grep -q 'flagRetrieveInteractiveWindows' android/app/src/main/res/xml/uninstall_guard_accessibility.xml
+          ! grep -q 'missing.add("device_admin")' android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
+          ! grep -q 'missing.add("overlay")' android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
 
       - name: Clean Gradle state
         run: |
@@ -209,7 +287,7 @@ jobs:
 
       - name: Sign and verify APK
         run: |
-          set -e
+          set -euo pipefail
           INPUT_APK=build/app/outputs/flutter-apk/app-release.apk
           test -s "$INPUT_APK"
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
@@ -234,7 +312,7 @@ jobs:
 
       - name: Publish APK to main
         run: |
-          set -e
+          set -euo pipefail
           mkdir -p apk
           cp dist/KidsMonnter.apk apk/KidsMonnter.apk
           cp dist/KidsMonnter-cert.txt apk/KidsMonnter-cert.txt
@@ -243,5 +321,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add apk/KidsMonnter.apk apk/KidsMonnter-cert.txt apk/KidsMonnter.sha256 DOWNLOAD_APK.md
-          git diff --cached --quiet || git commit -m "بناء KidsMonnter APK مع حماية حذف برمز ولي الأمر"
+          git diff --cached --quiet || git commit -m "بناء KidsMonnter بحارس حذف قوي ومحمي من التعطيل"
           git push origin HEAD:main
