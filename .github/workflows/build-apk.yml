@@ -105,6 +105,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/harden_unified.py
+          python3 tools/post_harden_fix.py
 
       - name: Verify unified protection structure
         run: |
@@ -131,6 +132,8 @@ jobs:
           grep -q 'TIME_TAMPER_DETECTED' "$KOTLIN"
           grep -q 'LOCK_FAIL_SAFE' "$KOTLIN"
           grep -q 'UNIFIED_SECURITY_HARDENING_V2' "$KOTLIN"
+          grep -q 'UNIFIED_SECURITY_HARDENING_V2_POSTFIX' "$KOTLIN"
+          ! grep -q 'return "$PIN_HASH_PREFIX$$PIN_HASH_ITERATIONS' "$KOTLIN"
 
       - name: Install packages
         run: flutter pub get
