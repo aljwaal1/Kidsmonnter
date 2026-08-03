@@ -156,7 +156,7 @@ jobs:
           grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' dist/KidsMonnter-cert.txt
           grep -qi "$EXPECTED_CERT_SHA256" dist/KidsMonnter-cert.txt
           sha256sum dist/KidsMonnter.apk | sed 's#dist/KidsMonnter.apk#KidsMonnter.apk#' > dist/KidsMonnter.sha256
-          sha256sum -c dist/KidsMonnter.sha256 --ignore-missing
+          (cd dist && sha256sum -c KidsMonnter.sha256)
 
       - name: Upload unified artifact
         uses: actions/upload-artifact@v4
