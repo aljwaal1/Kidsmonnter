@@ -1,7 +1,12 @@
-name: Build KidsMonnter APK
+name: Build KidsMonnter Unified APK
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'apk/**'
+      - 'DOWNLOAD_APK.md'
   push:
     branches: [main]
     paths-ignore:
@@ -9,7 +14,7 @@ on:
       - 'DOWNLOAD_APK.md'
 
 concurrency:
-  group: kidsmonnter-apk-main
+  group: kidsmonnter-unified-apk-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -18,11 +23,12 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     env:
       KEYSTORE_PASSWORD: KidsMonnter-Release-2026
       KEY_PASSWORD: KidsMonnter-Release-2026
       KEY_ALIAS: kidsmonnter
+      EXPECTED_CERT_SHA256: 3626d5e77223759fc15f1411c1bc8f96021a07b86eb0a86975083364a6443096
 
     steps:
       - uses: actions/checkout@v4
@@ -37,204 +43,24 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Restore signing key
+      - name: Restore fixed signing key
         uses: actions/cache@v4
         with:
           path: .signing/kidsmonnter-release.jks
           key: kidsmonnter-release-keystore-v2
 
-      - name: Prepare signing key
+      - name: Verify signing key is available
         run: |
-          set -e
-          mkdir -p .signing
-          if [ ! -s .signing/kidsmonnter-release.jks ]; then
-            keytool -genkeypair \
-              -keystore .signing/kidsmonnter-release.jks \
-              -storepass "$KEYSTORE_PASSWORD" \
-              -keypass "$KEY_PASSWORD" \
-              -alias "$KEY_ALIAS" \
-              -keyalg RSA -keysize 4096 -validity 10000 \
-              -dname "CN=KidsMonnter, OU=Android Release, O=KidsMonnter, L=Amman, C=JO"
-          fi
+          set -euo pipefail
+          test -s .signing/kidsmonnter-release.jks || {
+            echo 'Release keystore is missing. Refusing to create a new signing identity.' >&2
+            exit 1
+          }
 
       - name: Generate Android project
         run: flutter create --platforms=android --org com.explapp --no-pub .
 
-      - name: Prepare hardened parental uninstall guard
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          manifest_path = Path('native/AndroidManifest.xml')
-          manifest = manifest_path.read_text(encoding='utf-8')
-          manifest = re.sub(
-              r'\s*<receiver\s+android:name="\.KidsMonnterDeviceAdminReceiver".*?</receiver>',
-              '', manifest, flags=re.S,
-          )
-          manifest = re.sub(
-              r'(<service\s+android:name="\.UninstallGuardAccessibilityService".*?android:exported=")false(".*?</service>)',
-              r'\1true\2', manifest, count=1, flags=re.S,
-          )
-          manifest_path.write_text(manifest, encoding='utf-8')
-
-          main_path = Path('lib/main.dart')
-          main = main_path.read_text(encoding='utf-8')
-          main = re.sub(
-              r'bool get _runtimeSetupReady =>.*?;\s*// MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER',
-              'bool get _runtimeSetupReady => true; // FINAL_BUILD_SETUP_READY',
-              main,
-              count=1,
-              flags=re.S,
-          )
-          uninstall_card = r'''
-            // Accessibility uninstall protection card
-            Card(
-              child: ListTile(
-                leading: Icon(
-                  _uninstallGuardEnabled ? Icons.verified_user : Icons.shield_outlined,
-                  color: _uninstallGuardEnabled ? Colors.green : Colors.orange,
-                ),
-                title: Text(
-                  _uninstallGuardEnabled
-                      ? 'حماية حذف التطبيق مفعّلة'
-                      : 'فعّل حماية حذف التطبيق',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                subtitle: Text(
-                  _uninstallGuardEnabled
-                      ? 'الحذف ومعلومات التطبيق وتعطيل خدمة الحماية محمية برمز ولي الأمر.'
-                      : 'تراقب الخدمة شاشات النظام المرتبطة بحذف KidsMonnter فقط، ولا ترسل محتوى الشاشة خارج الجهاز.',
-                ),
-                trailing: _uninstallGuardEnabled
-                    ? const Icon(Icons.check_circle, color: Colors.green)
-                    : FilledButton.tonal(
-                        onPressed: _busy
-                            ? null
-                            : () => _channel.invokeMethod<void>('openAccessibilitySettings'),
-                        child: const Text('موافق وتفعيل'),
-                      ),
-                onTap: _uninstallGuardEnabled || _busy
-                    ? null
-                    : () => _channel.invokeMethod<void>('openAccessibilitySettings'),
-              ),
-            ),
-            const SizedBox(height: 10),
-            const Divider(height: 24),'''
-          main = re.sub(
-              r'\s*// DEFAULT_UNINSTALL_PROTECTION_UI_MARKER.*?const Divider\(height: 24\),',
-              '\n' + uninstall_card,
-              main,
-              count=1,
-              flags=re.S,
-          )
-          main_path.write_text(main, encoding='utf-8')
-
-          kotlin_path = Path('native/MainActivityV2.kt')
-          kotlin = kotlin_path.read_text(encoding='utf-8')
-          kotlin = re.sub(
-              r'\s*// MANDATORY_DEVICE_OWNER_SETUP_MARKER\s*val missing = mutableListOf<String>\(\)\s*// MANDATORY_DEVICE_ADMIN_PROTECTION_MARKER\s*val dpm = getSystemService\(Context\.DEVICE_POLICY_SERVICE\) as DevicePolicyManager\s*val admin = ComponentName\(this, KidsMonnterDeviceAdminReceiver::class\.java\)\s*if \(!dpm\.isAdminActive\(admin\)\) missing\.add\("device_admin"\)',
-              '\n                    val missing = mutableListOf<String>()\n                    // Device Admin is intentionally not used. Accessibility guard is required.',
-              kotlin,
-              count=1,
-              flags=re.S,
-          )
-          kotlin = kotlin.replace(
-              '        ensureUninstallProtection()\n        MethodChannel(',
-              '        MethodChannel(',
-              1,
-          )
-          kotlin = kotlin.replace(
-              '                    ensureUninstallProtection()\n                    appendGuardLog("PROTECTION_ENABLED"',
-              '                    appendGuardLog("PROTECTION_ENABLED"',
-              1,
-          )
-          kotlin = kotlin.replace(
-              '                    if (!Settings.canDrawOverlays(this)) missing.add("overlay")\n',
-              '',
-          )
-
-          # Protect the Accessibility settings page itself so the child cannot disable the guard first.
-          old_detection = '''        val destructiveAdminScreen = className.contains("DeviceAdmin", ignoreCase = true) &&
-            listOf("deactivate", "disable", "إلغاء التنشيط", "تعطيل")
-                .any { visibleText.contains(it, ignoreCase = true) }
-
-        if (prefs.isParentAppSettingsAuthorized()) return
-        if (uninstallScreen && !prefs.isParentUninstallAuthorized()) {'''
-          new_detection = '''        val destructiveAdminScreen = className.contains("DeviceAdmin", ignoreCase = true) &&
-            listOf("deactivate", "disable", "إلغاء التنشيط", "تعطيل")
-                .any { visibleText.contains(it, ignoreCase = true) }
-        val accessibilitySettingsScreen = listOf(
-            "AccessibilitySettings",
-            "AccessibilityService",
-            "InstalledAccessibilityService",
-            "ToggleAccessibilityServicePreferenceFragment",
-            "AccessibilityDetailsSettingsFragment",
-        ).any { className.contains(it, ignoreCase = true) } ||
-            listOf(
-                "accessibility",
-                "إمكانية الوصول",
-                "تسهيلات الاستخدام",
-                "الخدمات المثبتة",
-                "installed services",
-            ).any { visibleText.contains(it, ignoreCase = true) }
-
-        if (prefs.isParentAppSettingsAuthorized()) return
-        if (accessibilitySettingsScreen) {
-            launchParentGate(
-                ForceStopPinActivity::class.java,
-                "ACCESSIBILITY_GUARD_SETTINGS_INTERCEPTED",
-                "package=$sourcePackage class=$className",
-            )
-            return
-        }
-        if (uninstallScreen && !prefs.isParentUninstallAuthorized()) {'''
-          if old_detection not in kotlin:
-              raise SystemExit('Expected uninstall guard detection block was not found')
-          kotlin = kotlin.replace(old_detection, new_detection, 1)
-
-          # Log service connection so real-device diagnostics can confirm that Android bound the service.
-          old_interrupt = '    override fun onInterrupt() = Unit\n}'
-          new_interrupt = '''    override fun onServiceConnected() {
-        super.onServiceConnected()
-        appendGuardLog(
-            "UNINSTALL_GUARD_CONNECTED",
-            "sdk=${Build.VERSION.SDK_INT} manufacturer=${Build.MANUFACTURER} model=${Build.MODEL}",
-        )
-    }
-
-    override fun onInterrupt() {
-        appendGuardLog("UNINSTALL_GUARD_INTERRUPTED")
-    }
-}'''
-          if old_interrupt not in kotlin:
-              raise SystemExit('Expected AccessibilityService ending was not found')
-          kotlin = kotlin.replace(old_interrupt, new_interrupt, 1)
-          kotlin_path.write_text(kotlin, encoding='utf-8')
-
-          checks = {
-              'device admin removed from manifest': 'KidsMonnterDeviceAdminReceiver' not in manifest,
-              'accessibility service retained': 'UninstallGuardAccessibilityService' in manifest,
-              'accessibility service exported': 'android:exported="true"' in manifest,
-              'runtime gate bypassed': 'FINAL_BUILD_SETUP_READY' in main,
-              'activation card added': 'فعّل حماية حذف التطبيق' in main,
-              'device admin requirement removed': 'missing.add("device_admin")' not in kotlin,
-              'uninstall guard requirement retained': 'missing.add("uninstall_guard")' in kotlin,
-              'overlay requirement removed': 'missing.add("overlay")' not in kotlin,
-              'accessibility settings protected': 'ACCESSIBILITY_GUARD_SETTINGS_INTERCEPTED' in kotlin,
-              'service connection logged': 'UNINSTALL_GUARD_CONNECTED' in kotlin,
-              'safe-mode style guard classes present': all(x in kotlin for x in (
-                  'UninstallPinActivity', 'ForceStopPinActivity',
-                  'UninstallGuardAccessibilityService', 'GLOBAL_ACTION_BACK',
-              )),
-          }
-          failed = [name for name, ok in checks.items() if not ok]
-          if failed:
-              raise SystemExit('Source preparation failed: ' + ', '.join(failed))
-          PY
-
-      - name: Install native Android implementation
+      - name: Install unified parental-control implementation
         run: |
           set -euo pipefail
           rm -f test/widget_test.dart
@@ -242,8 +68,17 @@ jobs:
           cp native/MainActivityV2.kt android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
           cp native/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
           rm -rf android/app/src/main/kotlin/com/explapp/kidsmonnter
-          rm -f android/app/src/main/res/xml/device_admin_receiver.xml
           mkdir -p android/app/src/main/res/xml android/app/src/main/res/values
+
+          cat > android/app/src/main/res/xml/device_admin_receiver.xml <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-policies>
+                  <force-lock />
+              </uses-policies>
+          </device-admin>
+          XML
+
           cat > android/app/src/main/res/xml/uninstall_guard_accessibility.xml <<'XML'
           <?xml version="1.0" encoding="utf-8"?>
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
@@ -254,38 +89,55 @@ jobs:
               android:description="@string/uninstall_guard_description"
               android:notificationTimeout="80" />
           XML
+
           cat > android/app/src/main/res/values/kidsmonnter_strings.xml <<'XML'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
-              <string name="uninstall_guard_description">تراقب هذه الخدمة شاشات النظام الخاصة بحذف KidsMonnter أو تعطيله، وتطلب رمز ولي الأمر. لا ترسل محتوى الشاشة خارج الجهاز.</string>
+              <string name="device_admin_description">يساعد KidsMonnter على حماية إعدادات الرقابة الأبوية ومنع تعطيلها دون موافقة ولي الأمر.</string>
+              <string name="uninstall_guard_description">تراقب هذه الخدمة شاشات النظام المرتبطة بحذف KidsMonnter أو إيقافه، وتطلب رمز ولي الأمر. لا ترسل محتوى الشاشة خارج الجهاز.</string>
           </resources>
           XML
+
           sed -i 's/com.explapp.kidsmonnter/com.explapp.kidstimeguard/g' android/app/build.gradle.kts
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts
+
+      - name: Verify unified protection structure
+        run: |
+          set -euo pipefail
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          KOTLIN=android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
+
+          grep -q 'android.permission.SYSTEM_ALERT_WINDOW' "$MANIFEST"
+          grep -q 'KidsMonnterDeviceAdminReceiver' "$MANIFEST"
+          grep -q 'UninstallGuardAccessibilityService' "$MANIFEST"
+          grep -q 'MonitorService' "$MANIFEST"
+          grep -q 'BootReceiver' "$MANIFEST"
+          grep -q 'android.intent.action.BOOT_COMPLETED' "$MANIFEST"
+          grep -q 'missing.add("device_admin")' "$KOTLIN"
+          grep -q 'missing.add("uninstall_guard")' "$KOTLIN"
+          grep -q 'missing.add("overlay")' "$KOTLIN"
+          grep -q 'missing.add("battery")' "$KOTLIN"
+          grep -q 'missing.add("exact_alarm")' "$KOTLIN"
+          grep -q 'setUninstallBlocked' "$KOTLIN"
+          grep -q 'startLockTask' "$KOTLIN"
+          grep -q 'LOCK_TRIGGERED' "$KOTLIN"
+          grep -q 'UNINSTALL_AUTHORIZED_BY_PARENT_PIN' "$KOTLIN"
 
       - name: Install packages
         run: flutter pub get
 
-      - name: Verify prepared sources
-        run: |
-          set -euo pipefail
-          grep -q 'android:exported="true"' android/app/src/main/AndroidManifest.xml
-          grep -q 'UninstallGuardAccessibilityService' android/app/src/main/AndroidManifest.xml
-          grep -q 'ACCESSIBILITY_GUARD_SETTINGS_INTERCEPTED' android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
-          grep -q 'UNINSTALL_GUARD_CONNECTED' android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
-          grep -q 'flagRetrieveInteractiveWindows' android/app/src/main/res/xml/uninstall_guard_accessibility.xml
-          ! grep -q 'missing.add("device_admin")' android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
-          ! grep -q 'missing.add("overlay")' android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
+      - name: Analyze Flutter sources
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - name: Clean Gradle state
         run: |
           flutter clean
           rm -rf android/.gradle
 
-      - name: Build release APK
+      - name: Build unified release APK
         run: flutter build apk --release
 
-      - name: Sign and verify APK
+      - name: Sign and verify unified APK
         run: |
           set -euo pipefail
           INPUT_APK=build/app/outputs/flutter-apk/app-release.apk
@@ -301,25 +153,56 @@ jobs:
             "$INPUT_APK"
           "$APKSIGNER" verify --verbose --print-certs dist/KidsMonnter.apk | tee dist/KidsMonnter-cert.txt
           grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' dist/KidsMonnter-cert.txt
+          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' dist/KidsMonnter-cert.txt
+          grep -qi "$EXPECTED_CERT_SHA256" dist/KidsMonnter-cert.txt
           sha256sum dist/KidsMonnter.apk | sed 's#dist/KidsMonnter.apk#KidsMonnter.apk#' > dist/KidsMonnter.sha256
+          (cd dist && sha256sum -c KidsMonnter.sha256)
 
-      - name: Upload artifact
+      - name: Upload unified artifact
         uses: actions/upload-artifact@v4
         with:
           name: KidsMonnter-${{ github.sha }}
           path: dist/
           if-no-files-found: error
 
-      - name: Publish APK to main
+      - name: Publish the single official APK
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
           mkdir -p apk
           cp dist/KidsMonnter.apk apk/KidsMonnter.apk
           cp dist/KidsMonnter-cert.txt apk/KidsMonnter-cert.txt
           cp dist/KidsMonnter.sha256 apk/KidsMonnter.sha256
-          printf '# تحميل التطبيق\n\n[تحميل KidsMonnter APK](./apk/KidsMonnter.apk)\n\n- [بصمة SHA-256](./apk/KidsMonnter.sha256)\n- [معلومات شهادة التوقيع](./apk/KidsMonnter-cert.txt)\n' > DOWNLOAD_APK.md
+
+          git rm -f --ignore-unmatch \
+            apk/KidsMonnter-Safe.apk \
+            apk/KidsMonnter-Safe-cert.txt \
+            apk/KidsMonnter-Safe.sha256 \
+            apk/KidsMonnter-Smart.apk \
+            apk/KidsMonnter-Smart-cert.txt \
+            apk/KidsMonnter-Smart.sha256
+
+          cat > DOWNLOAD_APK.md <<'EOF'
+          # تحميل KidsMonnter
+
+          توجد نسخة رسمية واحدة فقط من التطبيق:
+
+          [تحميل KidsMonnter APK](./apk/KidsMonnter.apk)
+
+          ## التحقق من الملف
+
+          - [بصمة SHA-256](./apk/KidsMonnter.sha256)
+          - [معلومات شهادة التوقيع](./apk/KidsMonnter-cert.txt)
+
+          تتطلب الحماية تفعيل صلاحيات مسؤول الجهاز، وإمكانية الوصول، والظهور فوق التطبيقات، واستثناء البطارية، والمنبه الدقيق. لا يبدأ التطبيق الحماية قبل اكتمال المتطلبات.
+          EOF
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add apk/KidsMonnter.apk apk/KidsMonnter-cert.txt apk/KidsMonnter.sha256 DOWNLOAD_APK.md
-          git diff --cached --quiet || git commit -m "بناء KidsMonnter بحارس حذف قوي ومحمي من التعطيل"
+          git add \
+            apk/KidsMonnter.apk \
+            apk/KidsMonnter-cert.txt \
+            apk/KidsMonnter.sha256 \
+            DOWNLOAD_APK.md
+          git diff --cached --quiet || git commit -m "بناء نسخة KidsMonnter الموحدة"
           git push origin HEAD:main

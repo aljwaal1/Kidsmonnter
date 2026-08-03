@@ -1,21 +1,22 @@
-# تحميل تطبيق KidsMonnter
+# تحميل KidsMonnter
 
-## النسخة الآمنة للتثبيت المباشر
-[تحميل KidsMonnter Safe APK](./apk/KidsMonnter-Safe.apk)
+توجد نسخة رسمية واحدة فقط من التطبيق:
 
-- لا تستخدم Accessibility.
-- لا تستخدم Device Admin أو Device Owner.
-- لا تمنع حذف التطبيق.
-- مصممة لتقليل تحذيرات Play Protect عند التثبيت المباشر.
+[تحميل KidsMonnter APK](./apk/KidsMonnter.apk)
 
-## نسخة الحماية القوية
-[تحميل KidsMonnter Guard APK](./apk/KidsMonnter.apk)
+## التحقق من الملف
 
-- تستخدم Accessibility لحماية الحذف.
-- قد يعرض Android أو Play Protect تحذيرًا عند التثبيت الجانبي.
+- [بصمة SHA-256](./apk/KidsMonnter.sha256)
+- [معلومات شهادة التوقيع](./apk/KidsMonnter-cert.txt)
 
-### التحقق
-- [بصمة النسخة الآمنة](./apk/KidsMonnter-Safe.sha256)
-- [شهادة النسخة الآمنة](./apk/KidsMonnter-Safe-cert.txt)
-- [بصمة نسخة الحماية](./apk/KidsMonnter.sha256)
-- [شهادة نسخة الحماية](./apk/KidsMonnter-cert.txt)
+## متطلبات الحماية
+
+لا يبدأ التطبيق الحماية قبل تفعيل المتطلبات الأساسية التالية:
+
+- مسؤول الجهاز.
+- خدمة حماية الحذف عبر إمكانية الوصول.
+- الظهور فوق التطبيقات لإظهار شاشة القفل.
+- استثناء التطبيق من تحسين البطارية.
+- السماح بالمنبهات الدقيقة لإعادة تشغيل المراقبة.
+
+تستخدم النسخة الموحدة محرك حماية واحدًا، وخدمة خلفية واحدة، وملف APK واحدًا فقط، بدل نسخ Safe وSmart وGuard المنفصلة.
