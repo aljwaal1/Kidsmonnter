@@ -1,0 +1,1 @@
+Trigger final verification build for heartbeat and Play Protect compatible APK.
