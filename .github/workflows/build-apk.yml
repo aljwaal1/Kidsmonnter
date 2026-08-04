@@ -79,22 +79,10 @@ jobs:
           </device-admin>
           XML
 
-          cat > android/app/src/main/res/xml/uninstall_guard_accessibility.xml <<'XML'
-          <?xml version="1.0" encoding="utf-8"?>
-          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewClicked|typeViewSelected"
-              android:accessibilityFeedbackType="feedbackGeneric"
-              android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
-              android:canRetrieveWindowContent="true"
-              android:description="@string/uninstall_guard_description"
-              android:notificationTimeout="80" />
-          XML
-
           cat > android/app/src/main/res/values/kidsmonnter_strings.xml <<'XML'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <string name="device_admin_description">يساعد KidsMonnter على حماية إعدادات الرقابة الأبوية ومنع تعطيلها دون موافقة ولي الأمر.</string>
-              <string name="uninstall_guard_description">تراقب هذه الخدمة شاشات النظام المرتبطة بحذف KidsMonnter أو إيقافه، وتطلب رمز ولي الأمر. لا ترسل محتوى الشاشة خارج الجهاز.</string>
           </resources>
           XML
 
@@ -106,6 +94,7 @@ jobs:
           set -euo pipefail
           python3 tools/harden_unified.py
           python3 tools/post_harden_fix.py
+          python3 tools/play_protect_compatible.py
 
       - name: Verify unified protection structure
         run: |
@@ -115,12 +104,13 @@ jobs:
 
           grep -q 'android.permission.SYSTEM_ALERT_WINDOW' "$MANIFEST"
           grep -q 'KidsMonnterDeviceAdminReceiver' "$MANIFEST"
-          grep -q 'UninstallGuardAccessibilityService' "$MANIFEST"
+          ! grep -q 'android.permission.BIND_ACCESSIBILITY_SERVICE' "$MANIFEST"
+          ! grep -q 'UninstallGuardAccessibilityService' "$MANIFEST"
           grep -q 'MonitorService' "$MANIFEST"
           grep -q 'BootReceiver' "$MANIFEST"
           grep -q 'android.intent.action.BOOT_COMPLETED' "$MANIFEST"
           grep -q 'missing.add("device_admin")' "$KOTLIN"
-          grep -q 'missing.add("uninstall_guard")' "$KOTLIN"
+          ! grep -q 'missing.add("uninstall_guard")' "$KOTLIN"
           grep -q 'missing.add("overlay")' "$KOTLIN"
           grep -q 'missing.add("battery")' "$KOTLIN"
           grep -q 'missing.add("exact_alarm")' "$KOTLIN"
@@ -209,7 +199,7 @@ jobs:
           - [بصمة SHA-256](./apk/KidsMonnter.sha256)
           - [معلومات شهادة التوقيع](./apk/KidsMonnter-cert.txt)
 
-          تتطلب الحماية تفعيل صلاحيات مسؤول الجهاز، وإمكانية الوصول، والظهور فوق التطبيقات، واستثناء البطارية، والمنبه الدقيق. لا يبدأ التطبيق الحماية قبل اكتمال المتطلبات.
+          النسخة العادية لا تعلن خدمة Accessibility. يعمل عداد الوقت والقفل عبر الخدمة الأمامية والظهور فوق التطبيقات ومسؤول الجهاز. منع الحذف النظامي القوي متاح عند تجهيز الجهاز كـ Device Owner.
           EOF
 
           git config user.name "github-actions[bot]"
@@ -219,5 +209,5 @@ jobs:
             apk/KidsMonnter-cert.txt \
             apk/KidsMonnter.sha256 \
             DOWNLOAD_APK.md
-          git diff --cached --quiet || git commit -m "بناء نسخة KidsMonnter الموحدة المحسنة"
+          git diff --cached --quiet || git commit -m "بناء نسخة KidsMonnter المتوافقة مع Play Protect"
           git push origin HEAD:main
