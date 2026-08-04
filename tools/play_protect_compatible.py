@@ -1,34 +1,51 @@
 from pathlib import Path
 import re
 
-# This patch intentionally removes the Accessibility service from the
-# sideloaded consumer APK. Strong uninstall blocking remains available when
-# the app is provisioned as Device Owner, using DevicePolicyManager.
+# Remove the Accessibility service from the sideloaded consumer APK.
+# Strong uninstall blocking remains available when the app is provisioned
+# as Device Owner and uses DevicePolicyManager.setUninstallBlocked().
 
-manifest_path = Path("android/app/src/main/AndroidManifest.xml")
-kotlin_path = Path("android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt")
-flutter_path = Path("lib/main.dart")
-
-manifest = manifest_path.read_text(encoding="utf-8")
-manifest, count = re.subn(
-    r"\n\s*<service\s+android:name=\"\.UninstallGuardAccessibilityService\".*?</service>\s*\n",
-    "\n",
-    manifest,
-    count=1,
-    flags=re.S,
+GENERATED_MANIFEST = Path("android/app/src/main/AndroidManifest.xml")
+SOURCE_MANIFEST = Path("native/AndroidManifest.xml")
+GENERATED_KOTLIN = Path(
+    "android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt"
 )
-if count != 1:
-    raise SystemExit(f"Expected one Accessibility service declaration, found {count}")
-manifest_path.write_text(manifest, encoding="utf-8")
+SOURCE_KOTLIN = Path("native/MainActivityV2.kt")
+FLUTTER = Path("lib/main.dart")
 
-kotlin = kotlin_path.read_text(encoding="utf-8")
-old = '                    if (!isUninstallGuardAccessibilityEnabled()) missing.add("uninstall_guard")\n'
-if old not in kotlin:
-    raise SystemExit("Mandatory Accessibility runtime check was not found")
-kotlin = kotlin.replace(old, "", 1)
-kotlin_path.write_text(kotlin, encoding="utf-8")
 
-flutter = flutter_path.read_text(encoding="utf-8")
+def remove_accessibility_service(path: Path, required: bool) -> None:
+    text = path.read_text(encoding="utf-8")
+    updated, count = re.subn(
+        r"\n\s*<service\s+android:name=\"\.UninstallGuardAccessibilityService\".*?</service>\s*\n",
+        "\n",
+        text,
+        count=1,
+        flags=re.S,
+    )
+    if required and count != 1:
+        raise SystemExit(
+            f"Expected one Accessibility service declaration in {path}, found {count}"
+        )
+    if count:
+        path.write_text(updated, encoding="utf-8")
+
+
+def remove_mandatory_accessibility_check(path: Path, required: bool) -> None:
+    text = path.read_text(encoding="utf-8")
+    old = '                    if (!isUninstallGuardAccessibilityEnabled()) missing.add("uninstall_guard")\n'
+    if required and old not in text:
+        raise SystemExit(f"Mandatory Accessibility check was not found in {path}")
+    if old in text:
+        path.write_text(text.replace(old, "", 1), encoding="utf-8")
+
+
+remove_accessibility_service(GENERATED_MANIFEST, required=True)
+remove_accessibility_service(SOURCE_MANIFEST, required=False)
+remove_mandatory_accessibility_check(GENERATED_KOTLIN, required=True)
+remove_mandatory_accessibility_check(SOURCE_KOTLIN, required=False)
+
+flutter = FLUTTER.read_text(encoding="utf-8")
 old_ready = "      _batteryOptimizationIgnored &&\n      _uninstallGuardEnabled &&\n      _devicePolicy.adminActive;"
 new_ready = "      _batteryOptimizationIgnored &&\n      _devicePolicy.adminActive;"
 if old_ready not in flutter:
@@ -74,16 +91,12 @@ new_card = """            Card(
 if old_card not in flutter:
     raise SystemExit("Flutter Accessibility setup card was not found")
 flutter = flutter.replace(old_card, new_card, 1)
-flutter = flutter.replace(
-    "title: 'منع حذف التطبيق',",
-    "title: 'مسؤول الجهاز',",
-    1,
-)
+flutter = flutter.replace("title: 'منع حذف التطبيق',", "title: 'مسؤول الجهاز',", 1)
 flutter = flutter.replace(
     "? 'مسؤول الجهاز مفعّل. تبقى خدمة الحماية فوق محاولات الوصول إلى الحذف أثناء عمل الحماية.'",
     "? 'مسؤول الجهاز مفعّل. في وضع Device Owner يمكن تطبيق منع حذف نظامي، وفي التثبيت العادي يدعم استمرار القفل.'",
     1,
 )
-flutter_path.write_text(flutter, encoding="utf-8")
+FLUTTER.write_text(flutter, encoding="utf-8")
 
 print("Play Protect compatible consumer build patch applied")
