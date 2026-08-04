@@ -49,18 +49,13 @@ jobs:
           path: .signing/kidsmonnter-release.jks
           key: kidsmonnter-release-keystore-v2
 
-      - name: Verify signing key is available
-        run: |
-          set -euo pipefail
-          test -s .signing/kidsmonnter-release.jks || {
-            echo 'Release keystore is missing. Refusing to create a new signing identity.' >&2
-            exit 1
-          }
+      - name: Verify signing key
+        run: test -s .signing/kidsmonnter-release.jks
 
       - name: Generate Android project
         run: flutter create --platforms=android --org com.explapp --no-pub .
 
-      - name: Install unified parental-control implementation
+      - name: Install parental-control implementation
         run: |
           set -euo pipefail
           rm -f test/widget_test.dart
@@ -69,61 +64,56 @@ jobs:
           cp native/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
           rm -rf android/app/src/main/kotlin/com/explapp/kidsmonnter
           mkdir -p android/app/src/main/res/xml android/app/src/main/res/values
-
           cat > android/app/src/main/res/xml/device_admin_receiver.xml <<'XML'
           <?xml version="1.0" encoding="utf-8"?>
           <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-policies>
-                  <force-lock />
-              </uses-policies>
+              <uses-policies><force-lock /></uses-policies>
           </device-admin>
           XML
-
           cat > android/app/src/main/res/values/kidsmonnter_strings.xml <<'XML'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <string name="device_admin_description">يساعد KidsMonnter على حماية إعدادات الرقابة الأبوية ومنع تعطيلها دون موافقة ولي الأمر.</string>
           </resources>
           XML
-
           sed -i 's/com.explapp.kidsmonnter/com.explapp.kidstimeguard/g' android/app/build.gradle.kts
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts
 
-      - name: Apply parental-control security hardening
+      - name: Apply strict parental hardening
         run: |
           set -euo pipefail
           python3 tools/harden_unified.py
           python3 tools/post_harden_fix.py
           python3 tools/play_protect_compatible.py
 
-      - name: Verify unified protection structure
+      - name: Verify strict parental structure
         run: |
           set -euo pipefail
           MANIFEST=android/app/src/main/AndroidManifest.xml
           KOTLIN=android/app/src/main/kotlin/com/explapp/kidstimeguard/MainActivity.kt
-
-          grep -q 'android.permission.SYSTEM_ALERT_WINDOW' "$MANIFEST"
+          FLUTTER=lib/main.dart
           grep -q 'KidsMonnterDeviceAdminReceiver' "$MANIFEST"
-          ! grep -q 'android.permission.BIND_ACCESSIBILITY_SERVICE' "$MANIFEST"
-          ! grep -q 'UninstallGuardAccessibilityService' "$MANIFEST"
           grep -q 'MonitorService' "$MANIFEST"
           grep -q 'BootReceiver' "$MANIFEST"
-          grep -q 'android.intent.action.BOOT_COMPLETED' "$MANIFEST"
+          ! grep -q 'android.permission.BIND_ACCESSIBILITY_SERVICE' "$MANIFEST"
+          ! grep -q 'UninstallGuardAccessibilityService' "$MANIFEST"
+          grep -q 'missing.add("device_owner")' "$KOTLIN"
           grep -q 'missing.add("device_admin")' "$KOTLIN"
-          ! grep -q 'missing.add("uninstall_guard")' "$KOTLIN"
-          grep -q 'missing.add("overlay")' "$KOTLIN"
+          ! grep -q 'missing.add("overlay")' "$KOTLIN"
           grep -q 'missing.add("battery")' "$KOTLIN"
           grep -q 'missing.add("exact_alarm")' "$KOTLIN"
           grep -q 'setUninstallBlocked' "$KOTLIN"
+          grep -q 'setLockTaskPackages' "$KOTLIN"
+          grep -q 'setLockTaskFeatures' "$KOTLIN"
+          grep -q 'setStatusBarDisabled' "$KOTLIN"
           grep -q 'startLockTask' "$KOTLIN"
-          grep -q 'LOCK_TRIGGERED' "$KOTLIN"
-          grep -q 'UNINSTALL_AUTHORIZED_BY_PARENT_PIN' "$KOTLIN"
+          grep -q 'strictReady' "$KOTLIN"
+          grep -q 'STRICT_PARENTAL_DEVICE_OWNER_V1' "$KOTLIN"
+          grep -q '_devicePolicy.strictReady' "$FLUTTER"
+          grep -q 'STRICT_PARENTAL_DEVICE_OWNER_UI_V1' "$FLUTTER"
           grep -q 'PBKDF2WithHmacSHA256' "$KOTLIN"
           grep -q 'TIME_TAMPER_DETECTED' "$KOTLIN"
           grep -q 'LOCK_FAIL_SAFE' "$KOTLIN"
-          grep -q 'UNIFIED_SECURITY_HARDENING_V2' "$KOTLIN"
-          grep -q 'UNIFIED_SECURITY_HARDENING_V2_POSTFIX' "$KOTLIN"
-          ! grep -q 'return "$PIN_HASH_PREFIX$$PIN_HASH_ITERATIONS' "$KOTLIN"
 
       - name: Install packages
         run: flutter pub get
@@ -134,19 +124,16 @@ jobs:
       - name: Run Flutter tests
         run: flutter test
 
-      - name: Clean Gradle state
+      - name: Build release APK
         run: |
           flutter clean
           rm -rf android/.gradle
+          flutter build apk --release
 
-      - name: Build unified release APK
-        run: flutter build apk --release
-
-      - name: Sign and verify unified APK
+      - name: Sign and verify APK
         run: |
           set -euo pipefail
           INPUT_APK=build/app/outputs/flutter-apk/app-release.apk
-          test -s "$INPUT_APK"
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           mkdir -p dist
           "$APKSIGNER" sign \
@@ -163,14 +150,14 @@ jobs:
           sha256sum dist/KidsMonnter.apk | sed 's#dist/KidsMonnter.apk#KidsMonnter.apk#' > dist/KidsMonnter.sha256
           (cd dist && sha256sum -c KidsMonnter.sha256)
 
-      - name: Upload unified artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: KidsMonnter-${{ github.sha }}
           path: dist/
           if-no-files-found: error
 
-      - name: Publish the single official APK
+      - name: Publish official APK
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
@@ -178,36 +165,8 @@ jobs:
           cp dist/KidsMonnter.apk apk/KidsMonnter.apk
           cp dist/KidsMonnter-cert.txt apk/KidsMonnter-cert.txt
           cp dist/KidsMonnter.sha256 apk/KidsMonnter.sha256
-
-          git rm -f --ignore-unmatch \
-            apk/KidsMonnter-Safe.apk \
-            apk/KidsMonnter-Safe-cert.txt \
-            apk/KidsMonnter-Safe.sha256 \
-            apk/KidsMonnter-Smart.apk \
-            apk/KidsMonnter-Smart-cert.txt \
-            apk/KidsMonnter-Smart.sha256
-
-          cat > DOWNLOAD_APK.md <<'EOF'
-          # تحميل KidsMonnter
-
-          توجد نسخة رسمية واحدة فقط من التطبيق:
-
-          [تحميل KidsMonnter APK](./apk/KidsMonnter.apk)
-
-          ## التحقق من الملف
-
-          - [بصمة SHA-256](./apk/KidsMonnter.sha256)
-          - [معلومات شهادة التوقيع](./apk/KidsMonnter-cert.txt)
-
-          النسخة العادية لا تعلن خدمة Accessibility. يعمل عداد الوقت والقفل عبر الخدمة الأمامية والظهور فوق التطبيقات ومسؤول الجهاز. منع الحذف النظامي القوي متاح عند تجهيز الجهاز كـ Device Owner.
-          EOF
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            apk/KidsMonnter.apk \
-            apk/KidsMonnter-cert.txt \
-            apk/KidsMonnter.sha256 \
-            DOWNLOAD_APK.md
-          git diff --cached --quiet || git commit -m "بناء نسخة KidsMonnter المتوافقة مع Play Protect"
+          git add apk/KidsMonnter.apk apk/KidsMonnter-cert.txt apk/KidsMonnter.sha256
+          git diff --cached --quiet || git commit -m "بناء KidsMonnter الأبوي الصارم"
           git push origin HEAD:main
