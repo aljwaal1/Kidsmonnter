@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import runpy
 
 # Remove the Accessibility service from the sideloaded consumer APK.
 # Strong uninstall blocking remains available when the app is provisioned
@@ -100,3 +101,9 @@ flutter = flutter.replace(
 FLUTTER.write_text(flutter, encoding="utf-8")
 
 print("Play Protect compatible consumer build patch applied")
+
+# Normalize the strict-mode patch against the latest hardened Kotlin layout.
+runpy.run_path("tools/strict_parental_compat.py", run_name="__main__")
+
+# The official unified APK now requires the strict Device Owner path.
+runpy.run_path("tools/strict_parental_mode.py", run_name="__main__")
