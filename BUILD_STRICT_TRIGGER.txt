@@ -1,0 +1,2 @@
+Trigger official strict parental APK build after PR #24 merge.
+Commit source: 3b391c217b8f26816acecf8982002c860e052570
