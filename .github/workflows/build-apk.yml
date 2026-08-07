@@ -70,23 +70,33 @@ jobs:
               <uses-policies><force-lock /></uses-policies>
           </device-admin>
           XML
+          cat > android/app/src/main/res/xml/uninstall_guard_accessibility.xml <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewClicked"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:notificationTimeout="100"
+              android:canRetrieveWindowContent="true"
+              android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
+              android:description="@string/accessibility_guard_description" />
+          XML
           cat > android/app/src/main/res/values/kidsmonnter_strings.xml <<'XML'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <string name="device_admin_description">يساعد KidsMonnter على حماية إعدادات الرقابة الأبوية ومنع تعطيلها دون موافقة ولي الأمر.</string>
+              <string name="accessibility_guard_description">حماية أبوية مرئية تمنع الوصول إلى حذف KidsMonnter أو إيقافه دون رمز ولي الأمر.</string>
           </resources>
           XML
           sed -i 's/com.explapp.kidsmonnter/com.explapp.kidstimeguard/g' android/app/build.gradle.kts
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts
 
-      - name: Apply strict parental hardening
+      - name: Apply Guard Mode hardening
         run: |
           set -euo pipefail
           python3 tools/harden_unified.py
           python3 tools/post_harden_fix.py
-          python3 tools/play_protect_compatible.py
 
-      - name: Verify strict parental structure
+      - name: Verify Guard Mode structure
         run: |
           set -euo pipefail
           MANIFEST=android/app/src/main/AndroidManifest.xml
@@ -95,25 +105,26 @@ jobs:
           grep -q 'KidsMonnterDeviceAdminReceiver' "$MANIFEST"
           grep -q 'MonitorService' "$MANIFEST"
           grep -q 'BootReceiver' "$MANIFEST"
-          ! grep -q 'android.permission.BIND_ACCESSIBILITY_SERVICE' "$MANIFEST"
-          ! grep -q 'UninstallGuardAccessibilityService' "$MANIFEST"
-          grep -q 'missing.add("device_owner")' "$KOTLIN"
+          grep -q 'android.permission.BIND_ACCESSIBILITY_SERVICE' "$MANIFEST"
+          grep -q 'UninstallGuardAccessibilityService' "$MANIFEST"
+          grep -q 'ForceStopPinActivity' "$MANIFEST"
+          grep -q 'UninstallPinActivity' "$MANIFEST"
           grep -q 'missing.add("device_admin")' "$KOTLIN"
-          ! grep -q 'missing.add("overlay")' "$KOTLIN"
+          grep -q 'missing.add("uninstall_guard")' "$KOTLIN"
+          grep -q 'missing.add("overlay")' "$KOTLIN"
           grep -q 'missing.add("battery")' "$KOTLIN"
           grep -q 'missing.add("exact_alarm")' "$KOTLIN"
+          ! grep -q 'missing.add("device_owner")' "$KOTLIN"
+          grep -q 'isUninstallGuardAccessibilityEnabled' "$KOTLIN"
+          grep -q 'UNINSTALL_ATTEMPT_INTERCEPTED' "$KOTLIN"
+          grep -q 'FORCE_STOP_OR_APP_SETTINGS_INTERCEPTED' "$KOTLIN"
           grep -q 'setUninstallBlocked' "$KOTLIN"
-          grep -q 'setLockTaskPackages' "$KOTLIN"
-          grep -q 'setLockTaskFeatures' "$KOTLIN"
-          grep -q 'setStatusBarDisabled' "$KOTLIN"
           grep -q 'startLockTask' "$KOTLIN"
-          grep -q 'strictReady' "$KOTLIN"
-          grep -q 'STRICT_PARENTAL_DEVICE_OWNER_V1' "$KOTLIN"
-          grep -q '_devicePolicy.strictReady' "$FLUTTER"
-          grep -q 'STRICT_PARENTAL_DEVICE_OWNER_UI_V1' "$FLUTTER"
           grep -q 'PBKDF2WithHmacSHA256' "$KOTLIN"
           grep -q 'TIME_TAMPER_DETECTED' "$KOTLIN"
           grep -q 'LOCK_FAIL_SAFE' "$KOTLIN"
+          grep -q '_uninstallGuardEnabled' "$FLUTTER"
+          grep -q "openAccessibilitySettings" "$FLUTTER"
 
       - name: Install packages
         run: flutter pub get
@@ -168,5 +179,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add apk/KidsMonnter.apk apk/KidsMonnter-cert.txt apk/KidsMonnter.sha256
-          git diff --cached --quiet || git commit -m "بناء KidsMonnter الأبوي الصارم"
+          git diff --cached --quiet || git commit -m "بناء KidsMonnter Guard Mode المشدد"
           git push origin HEAD:main
