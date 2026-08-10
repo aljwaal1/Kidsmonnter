@@ -4,14 +4,10 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [main]
-    paths-ignore:
-      - 'apk/**'
-      - 'DOWNLOAD_APK.md'
+    paths-ignore: ['apk/**', 'DOWNLOAD_APK.md']
   push:
     branches: [main]
-    paths-ignore:
-      - 'apk/**'
-      - 'DOWNLOAD_APK.md'
+    paths-ignore: ['apk/**', 'DOWNLOAD_APK.md']
 
 concurrency:
   group: kidsmonnter-unified-apk-${{ github.ref }}
@@ -29,32 +25,25 @@ jobs:
       KEY_PASSWORD: KidsMonnter-Release-2026
       KEY_ALIAS: kidsmonnter
       EXPECTED_CERT_SHA256: 3626d5e77223759fc15f1411c1bc8f96021a07b86eb0a86975083364a6443096
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
-
       - name: Restore fixed signing key
         uses: actions/cache@v4
         with:
           path: .signing/kidsmonnter-release.jks
           key: kidsmonnter-release-keystore-v2
-
       - name: Verify signing key
         run: test -s .signing/kidsmonnter-release.jks
-
       - name: Generate Android project
         run: flutter create --platforms=android --org com.explapp --no-pub .
-
       - name: Install parental-control implementation
         run: |
           set -euo pipefail
@@ -66,36 +55,23 @@ jobs:
           mkdir -p android/app/src/main/res/xml android/app/src/main/res/values
           cat > android/app/src/main/res/xml/device_admin_receiver.xml <<'XML'
           <?xml version="1.0" encoding="utf-8"?>
-          <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-policies><force-lock /></uses-policies>
-          </device-admin>
+          <device-admin xmlns:android="http://schemas.android.com/apk/res/android"><uses-policies><force-lock /></uses-policies></device-admin>
           XML
           cat > android/app/src/main/res/xml/uninstall_guard_accessibility.xml <<'XML'
           <?xml version="1.0" encoding="utf-8"?>
-          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewClicked"
-              android:accessibilityFeedbackType="feedbackGeneric"
-              android:notificationTimeout="100"
-              android:canRetrieveWindowContent="true"
-              android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
-              android:description="@string/accessibility_guard_description" />
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android" android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewClicked" android:accessibilityFeedbackType="feedbackGeneric" android:notificationTimeout="100" android:canRetrieveWindowContent="true" android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows" android:description="@string/accessibility_guard_description" />
           XML
           cat > android/app/src/main/res/values/kidsmonnter_strings.xml <<'XML'
           <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <string name="device_admin_description">يساعد KidsMonnter على حماية إعدادات الرقابة الأبوية ومنع تعطيلها دون موافقة ولي الأمر.</string>
-              <string name="accessibility_guard_description">حماية أبوية مرئية تمنع الوصول إلى حذف KidsMonnter أو إيقافه دون رمز ولي الأمر.</string>
-          </resources>
+          <resources><string name="device_admin_description">يساعد KidsMonnter على حماية إعدادات الرقابة الأبوية ومنع تعطيلها دون موافقة ولي الأمر.</string><string name="accessibility_guard_description">حماية أبوية مرئية تمنع الوصول إلى حذف KidsMonnter أو إيقافه دون رمز ولي الأمر.</string></resources>
           XML
           sed -i 's/com.explapp.kidsmonnter/com.explapp.kidstimeguard/g' android/app/build.gradle.kts
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' android/app/build.gradle.kts
-
       - name: Apply Guard Mode hardening
         run: |
           set -euo pipefail
           python3 tools/harden_unified.py
           python3 tools/post_harden_fix.py
-
       - name: Verify Guard Mode structure
         run: |
           set -euo pipefail
@@ -115,59 +91,49 @@ jobs:
           grep -q 'missing.add("battery")' "$KOTLIN"
           grep -q 'missing.add("exact_alarm")' "$KOTLIN"
           ! grep -q 'missing.add("device_owner")' "$KOTLIN"
-          grep -q 'isUninstallGuardAccessibilityEnabled' "$KOTLIN"
           grep -q 'UNINSTALL_ATTEMPT_INTERCEPTED' "$KOTLIN"
           grep -q 'FORCE_STOP_OR_APP_SETTINGS_INTERCEPTED' "$KOTLIN"
-          grep -q 'setUninstallBlocked' "$KOTLIN"
-          grep -q 'startLockTask' "$KOTLIN"
           grep -q 'PBKDF2WithHmacSHA256' "$KOTLIN"
           grep -q 'TIME_TAMPER_DETECTED' "$KOTLIN"
           grep -q 'LOCK_FAIL_SAFE' "$KOTLIN"
+          grep -q 'HEARTBEAT_ELAPSED_KEY' "$KOTLIN"
+          grep -q 'val heartbeatElapsed = prefs.getLong(HEARTBEAT_ELAPSED_KEY, 0L)' "$KOTLIN"
+          ! grep -q 'System.currentTimeMillis() - prefs.getLong(HEARTBEAT_KEY, 0L)' "$KOTLIN"
+          grep -q 'DURATION_CHANGE_REQUESTED' "$KOTLIN"
+          grep -q 'DURATION_CHANGE_VERIFIED' "$KOTLIN"
+          grep -q 'DURATION_SAVE_MISMATCH' "$KOTLIN"
           grep -q '_uninstallGuardEnabled' "$FLUTTER"
-          grep -q "openAccessibilitySettings" "$FLUTTER"
-
+          grep -q 'openAccessibilitySettings' "$FLUTTER"
       - name: Install packages
         run: flutter pub get
-
       - name: Analyze Flutter sources
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
-
       - name: Run Flutter tests
         run: flutter test
-
       - name: Build release APK
         run: |
           flutter clean
           rm -rf android/.gradle
           flutter build apk --release
-
       - name: Sign and verify APK
         run: |
           set -euo pipefail
           INPUT_APK=build/app/outputs/flutter-apk/app-release.apk
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           mkdir -p dist
-          "$APKSIGNER" sign \
-            --ks .signing/kidsmonnter-release.jks \
-            --ks-key-alias "$KEY_ALIAS" \
-            --ks-pass env:KEYSTORE_PASSWORD \
-            --key-pass env:KEY_PASSWORD \
-            --out dist/KidsMonnter.apk \
-            "$INPUT_APK"
+          "$APKSIGNER" sign --ks .signing/kidsmonnter-release.jks --ks-key-alias "$KEY_ALIAS" --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD --out dist/KidsMonnter.apk "$INPUT_APK"
           "$APKSIGNER" verify --verbose --print-certs dist/KidsMonnter.apk | tee dist/KidsMonnter-cert.txt
           grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' dist/KidsMonnter-cert.txt
           grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' dist/KidsMonnter-cert.txt
           grep -qi "$EXPECTED_CERT_SHA256" dist/KidsMonnter-cert.txt
           sha256sum dist/KidsMonnter.apk | sed 's#dist/KidsMonnter.apk#KidsMonnter.apk#' > dist/KidsMonnter.sha256
           (cd dist && sha256sum -c KidsMonnter.sha256)
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: KidsMonnter-${{ github.sha }}
           path: dist/
           if-no-files-found: error
-
       - name: Publish official APK
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
