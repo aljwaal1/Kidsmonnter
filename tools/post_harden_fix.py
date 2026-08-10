@@ -40,6 +40,18 @@ replacements = {
                     .putLong(HEARTBEAT_KEY, System.currentTimeMillis())
                     .putLong(HEARTBEAT_ELAPSED_KEY, SystemClock.elapsedRealtime())
                     .remove(LAST_SERVICE_START_REQUEST_ELAPSED_KEY)''',
+    '''val heartbeatAge = System.currentTimeMillis() - prefs.getLong(HEARTBEAT_KEY, 0L)
+            val serviceNeedsRestart =
+                !isWatchdog || heartbeatAge < 0L || heartbeatAge > STALE_HEARTBEAT_MS''':
+        '''val heartbeatElapsed = prefs.getLong(HEARTBEAT_ELAPSED_KEY, 0L)
+            val nowElapsed = SystemClock.elapsedRealtime()
+            val heartbeatAge = if (heartbeatElapsed <= 0L || heartbeatElapsed > nowElapsed) {
+                Long.MAX_VALUE
+            } else {
+                nowElapsed - heartbeatElapsed
+            }
+            val serviceNeedsRestart =
+                !isWatchdog || heartbeatAge > STALE_HEARTBEAT_MS''',
 }
 
 for old, new in replacements.items():
@@ -54,9 +66,13 @@ if 'TIME_TAMPER_DETECTED' not in text:
     raise SystemExit('trusted-clock hardening marker missing')
 if 'HEARTBEAT_ELAPSED_KEY' not in text:
     raise SystemExit('separate elapsed heartbeat marker missing')
+if 'val heartbeatElapsed = prefs.getLong(HEARTBEAT_ELAPSED_KEY, 0L)' not in text:
+    raise SystemExit('watchdog must use elapsed heartbeat clock')
+if 'System.currentTimeMillis() - prefs.getLong(HEARTBEAT_KEY, 0L)' in text:
+    raise SystemExit('mixed wall-clock watchdog calculation still present')
 if 'isUnlockedForTrustedDay(prefs)\n' in text.split('private fun isUnlockedForTrustedDay', 1)[1].split('\n\n', 1)[0]:
     raise SystemExit('trusted-day helper is recursive')
 
-text += "\n// UNIFIED_SECURITY_HARDENING_V2_POSTFIX\n// DUAL_HEARTBEAT_CLOCK_FIX\n"
+text += "\n// UNIFIED_SECURITY_HARDENING_V3_POSTFIX\n// DUAL_HEARTBEAT_CLOCK_FIX\n// WATCHDOG_ELAPSED_CLOCK_ONLY\n"
 path.write_text(text, encoding="utf-8")
 print('Post-hardening corrections applied successfully')
