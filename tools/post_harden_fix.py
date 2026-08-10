@@ -52,6 +52,40 @@ replacements = {
             }
             val serviceNeedsRestart =
                 !isWatchdog || heartbeatAge > STALE_HEARTBEAT_MS''',
+    '''                    } else {
+                        prefs.edit().putInt("daily_minutes", minutes).commit()
+                        appendGuardLog(
+                            "DAILY_MINUTES_UPDATED",
+                            "minutes=$minutes protectionEnabled=${prefs.getBoolean("enabled", false)}",
+                        )
+                        result.success(true)
+                    }''':
+        '''                    } else {
+                        val oldMinutes = prefs.getInt("daily_minutes", 10)
+                        appendGuardLog(
+                            "DURATION_CHANGE_REQUESTED",
+                            "old=$oldMinutes requested=$minutes protectionEnabled=${prefs.getBoolean("enabled", false)}",
+                        )
+                        val saved = prefs.edit().putInt("daily_minutes", minutes).commit()
+                        val actualMinutes = prefs.getInt("daily_minutes", -1)
+                        if (!saved || actualMinutes != minutes) {
+                            appendGuardLog(
+                                "DURATION_CHANGE_FAILED",
+                                "old=$oldMinutes requested=$minutes actual=$actualMinutes commit=$saved",
+                            )
+                            result.error(
+                                "DURATION_SAVE_MISMATCH",
+                                "تعذر التحقق من حفظ المدة المطلوبة",
+                                mapOf("requested" to minutes, "actual" to actualMinutes),
+                            )
+                        } else {
+                            appendGuardLog(
+                                "DURATION_CHANGE_VERIFIED",
+                                "old=$oldMinutes requested=$minutes actual=$actualMinutes",
+                            )
+                            result.success(true)
+                        }
+                    }''',
 }
 
 for old, new in replacements.items():
@@ -60,19 +94,23 @@ for old, new in replacements.items():
         raise SystemExit(f"Post-hardening fix expected one match, found {count}: {old[:80]}")
     text = text.replace(old, new, 1)
 
-if 'PBKDF2WithHmacSHA256' not in text:
-    raise SystemExit('PBKDF2 hardening marker missing')
-if 'TIME_TAMPER_DETECTED' not in text:
-    raise SystemExit('trusted-clock hardening marker missing')
-if 'HEARTBEAT_ELAPSED_KEY' not in text:
-    raise SystemExit('separate elapsed heartbeat marker missing')
-if 'val heartbeatElapsed = prefs.getLong(HEARTBEAT_ELAPSED_KEY, 0L)' not in text:
-    raise SystemExit('watchdog must use elapsed heartbeat clock')
+required = [
+    'PBKDF2WithHmacSHA256',
+    'TIME_TAMPER_DETECTED',
+    'HEARTBEAT_ELAPSED_KEY',
+    'val heartbeatElapsed = prefs.getLong(HEARTBEAT_ELAPSED_KEY, 0L)',
+    'DURATION_CHANGE_REQUESTED',
+    'DURATION_CHANGE_VERIFIED',
+    'DURATION_SAVE_MISMATCH',
+]
+for marker in required:
+    if marker not in text:
+        raise SystemExit(f'required post-hardening marker missing: {marker}')
 if 'System.currentTimeMillis() - prefs.getLong(HEARTBEAT_KEY, 0L)' in text:
     raise SystemExit('mixed wall-clock watchdog calculation still present')
 if 'isUnlockedForTrustedDay(prefs)\n' in text.split('private fun isUnlockedForTrustedDay', 1)[1].split('\n\n', 1)[0]:
     raise SystemExit('trusted-day helper is recursive')
 
-text += "\n// UNIFIED_SECURITY_HARDENING_V3_POSTFIX\n// DUAL_HEARTBEAT_CLOCK_FIX\n// WATCHDOG_ELAPSED_CLOCK_ONLY\n"
+text += "\n// UNIFIED_SECURITY_HARDENING_V4_POSTFIX\n// DUAL_HEARTBEAT_CLOCK_FIX\n// WATCHDOG_ELAPSED_CLOCK_ONLY\n// VERIFIED_DURATION_PERSISTENCE\n"
 path.write_text(text, encoding="utf-8")
 print('Post-hardening corrections applied successfully')
