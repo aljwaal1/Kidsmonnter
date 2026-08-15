@@ -1,0 +1,1 @@
+Force clean verification build after watchdog and duration persistence fixes.
