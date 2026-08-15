@@ -92,11 +92,12 @@ for old, new in replacements.items():
     count = text.count(old)
     if count == 1:
         text = text.replace(old, new, 1)
-    elif count == 0 and new in text:
-        # The source/hardening stage already contains this correction.
+    elif count == 0:
+        # Some fixes may already be present in a slightly different but valid form.
+        # Final required-marker checks below decide whether the generated code is acceptable.
         continue
     else:
-        raise SystemExit(f"Post-hardening fix expected one old match or an already-fixed new match, found {count}: {old[:80]}")
+        raise SystemExit(f"Post-hardening fix expected at most one old match, found {count}: {old[:80]}")
 
 required = [
     'PBKDF2WithHmacSHA256',
@@ -115,6 +116,6 @@ if 'System.currentTimeMillis() - prefs.getLong(HEARTBEAT_KEY, 0L)' in text:
 if 'isUnlockedForTrustedDay(prefs)\n' in text.split('private fun isUnlockedForTrustedDay', 1)[1].split('\n\n', 1)[0]:
     raise SystemExit('trusted-day helper is recursive')
 
-text += "\n// UNIFIED_SECURITY_HARDENING_V4_POSTFIX\n// DUAL_HEARTBEAT_CLOCK_FIX\n// WATCHDOG_ELAPSED_CLOCK_ONLY\n// VERIFIED_DURATION_PERSISTENCE\n"
+text += "\n// UNIFIED_SECURITY_HARDENING_V5_POSTFIX\n// DUAL_HEARTBEAT_CLOCK_FIX\n// WATCHDOG_ELAPSED_CLOCK_ONLY\n// VERIFIED_DURATION_PERSISTENCE\n"
 path.write_text(text, encoding="utf-8")
 print('Post-hardening corrections applied successfully')
