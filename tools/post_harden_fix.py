@@ -90,9 +90,13 @@ replacements = {
 
 for old, new in replacements.items():
     count = text.count(old)
-    if count != 1:
-        raise SystemExit(f"Post-hardening fix expected one match, found {count}: {old[:80]}")
-    text = text.replace(old, new, 1)
+    if count == 1:
+        text = text.replace(old, new, 1)
+    elif count == 0 and new in text:
+        # The source/hardening stage already contains this correction.
+        continue
+    else:
+        raise SystemExit(f"Post-hardening fix expected one old match or an already-fixed new match, found {count}: {old[:80]}")
 
 required = [
     'PBKDF2WithHmacSHA256',
