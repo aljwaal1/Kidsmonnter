@@ -1,0 +1,2 @@
+Independent verification trigger for unified parental-control hardening v2.
+Accessibility reference synchronized; rerun full tests and release build.
