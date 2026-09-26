@@ -1,0 +1,55 @@
+name: Publish Latest APK
+
+on:
+  workflow_run:
+    workflows: ["Build KidsMonnter Unified APK"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          pattern: KidsMonnter-*
+          merge-multiple: true
+          path: latest-dist
+
+      - name: Validate APK
+        run: |
+          set -euo pipefail
+          test -s latest-dist/KidsMonnter.apk
+          test -s latest-dist/KidsMonnter.sha256
+          (cd latest-dist && sha256sum -c KidsMonnter.sha256)
+
+      - name: Publish latest APK
+        run: |
+          set -euo pipefail
+          mkdir -p apk
+          cp latest-dist/KidsMonnter.apk apk/KidsMonnter-latest.apk
+          cp latest-dist/KidsMonnter.sha256 apk/KidsMonnter-latest.sha256
+
+          if [ -f latest-dist/SIGNING_NOTICE.txt ]; then
+            cp latest-dist/SIGNING_NOTICE.txt apk/KidsMonnter-latest-SIGNING_NOTICE.txt
+          else
+            rm -f apk/KidsMonnter-latest-SIGNING_NOTICE.txt
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apk/
+          git diff --cached --quiet || git commit -m "Publish latest successful KidsMonnter APK"
+          git push origin HEAD:main
