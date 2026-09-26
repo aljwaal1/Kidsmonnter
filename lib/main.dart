@@ -416,7 +416,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('⚙️ إعداد صلاحيات الحماية')),
+      appBar: AppBar(title: const Text('⚙️ إعداد الحماية الإجباري')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -430,7 +430,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 8),
             const Text(
-              'هذه الخطوات ضرورية حتى يستمر احتساب الوقت ولا يوقف نظام الهاتف خدمة الحماية.',
+              'لا يمكن استخدام التطبيق قبل إكمال صلاحيات الحماية. هذه الخطوات ضرورية حتى يستمر احتساب الوقت ولا يوقف نظام الهاتف خدمة الحماية.',
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 18),
