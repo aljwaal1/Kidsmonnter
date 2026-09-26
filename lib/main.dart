@@ -430,7 +430,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('إعداد الحماية الإجباري')),
+      appBar: AppBar(title: const Text('⚙️ إعداد صلاحيات الحماية')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(16),
@@ -438,7 +438,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             const Icon(Icons.admin_panel_settings_outlined, size: 64),
             const SizedBox(height: 12),
             const Text(
-              'لا يمكن استخدام التطبيق قبل إكمال صلاحيات الحماية',
+              'يجب إكمال هذه الصلاحيات لتبدأ الحماية',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
             ),
@@ -1030,7 +1030,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final status = _status;
     if (status == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('حارس وقت الأطفال')),
+        appBar: AppBar(title: const Text('كيدز مونتر — حارس الوقت')),
         body: Center(
           child: _error == null
               ? const CircularProgressIndicator()
@@ -1063,11 +1063,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('حارس وقت الأطفال'),
+        title: const Text('كيدز مونتر — حارس الوقت'),
         centerTitle: true,
         actions: [
           IconButton(
-            tooltip: 'تحديث الحالة',
+            tooltip: 'تحديث حالة الحماية',
             onPressed: _busy ? null : _refreshStatus,
             icon: const Icon(Icons.refresh),
           ),
@@ -1128,7 +1128,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          status.enabled ? 'الحماية مفعّلة' : 'الحماية متوقفة',
+                          status.enabled ? '🛡️ الحماية نشطة وتعمل' : '⚠️ الحماية غير مفعّلة',
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight: FontWeight.bold,
@@ -1138,8 +1138,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         const SizedBox(height: 3),
                         Text(
                           status.enabled
-                              ? 'الوقت يُحتسب بواسطة خدمة Android حتى عند الخروج من التطبيق.'
-                              : 'اختر المدة ثم فعّل الحماية.',
+                              ? 'يتم احتساب الوقت تلقائيًا حتى عند إغلاق التطبيق.'
+                              : 'حدد المدة المطلوبة وفعّل الحماية لبدء المراقبة.',
                           style: TextStyle(
                             fontSize: 12,
                             color: status.enabled ? Colors.white70 : const Color(0xFF64748B),
@@ -1276,7 +1276,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 18),
             const Text(
-              'اختر مدة الاستخدام اليومية',
+              '📅 تحديد مدة الاستخدام اليومية المسموحة',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
@@ -1331,12 +1331,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               child: ListTile(
                 leading: Icon(status.hasPin ? Icons.lock : Icons.lock_open),
                 title: Text(
-                  status.hasPin ? 'رمز ولي الأمر محفوظ' : 'أنشئ رمز ولي الأمر',
+                  status.hasPin ? '🔒 رمز ولي الأمر — محفوظ وآمن' : '🔑 إنشاء رمز ولي الأمر',
                 ),
-                subtitle: const Text('مطلوب لتغيير المدة أو إيقاف الحماية.'),
+                subtitle: const Text('يُستخدم للتحكم بالمدة وإيقاف الحماية وتعديل الإعدادات.'),
                 trailing: FilledButton.tonal(
                   onPressed: _busy ? null : _ensurePin,
-                  child: Text(status.hasPin ? 'محفوظ' : 'إنشاء'),
+                  child: Text(status.hasPin ? '✅ جاهز' : '🆕 إنشاء الآن'),
                 ),
               ),
             ),
@@ -1344,7 +1344,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Card(
               child: ListTile(
                 leading: const Icon(Icons.alternate_email),
-                title: const Text('بريد ولي الأمر'),
+                title: const Text('📧 البريد الإلكتروني لولي الأمر'),
                 subtitle: Text(
                   status.parentEmail.isEmpty
                       ? 'لم يتم تحديد بريد.'
@@ -1358,9 +1358,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             Card(
               child: ListTile(
                 leading: const Icon(Icons.bug_report_outlined),
-                title: const Text('سجل تشخيص التطبيق'),
+                title: const Text('🛠️ سجل تشخيص الحماية'),
                 subtitle: const Text(
-                  'يعرض تشغيل الخدمة، احتساب الوقت، المراقب ومحاولات القفل.',
+                  'يعرض حالة الخدمة، احتساب الوقت، محاولات القفل، والمراقب.',
                 ),
                 trailing: const Icon(Icons.chevron_left),
                 onTap: _showDiagnosticLog,
@@ -1374,9 +1374,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   label: Text('${status.failedAttempts}'),
                   child: const Icon(Icons.gpp_maybe_outlined),
                 ),
-                title: const Text('تقارير المحاولات الخاطئة'),
+                title: const Text('🚨 تقارير محاولات الوصول غير المصرح بها'),
                 subtitle:
-                    Text('محفوظة يوميًا — المجموع: ${status.failedAttempts}'),
+                    Text('سجل يومي — إجمالي المحاولات: ${status.failedAttempts}'),
                 onTap: _showFailedAttempts,
               ),
             ),
@@ -1389,7 +1389,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'إضافة وقت',
+                        '⏱️ منح وقت إضافي للطفل',
                         style: TextStyle(fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 10),
