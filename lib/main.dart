@@ -23,11 +23,51 @@ class KidsMonnterApp extends StatelessWidget {
       title: 'حارس وقت الأطفال',
       theme: ThemeData(
         useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF315F57),
-        scaffoldBackgroundColor: const Color(0xFFF4F7F5),
-        cardTheme: const CardThemeData(
+        brightness: Brightness.light,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF0F766E),
+          primary: const Color(0xFF0F766E),
+          secondary: const Color(0xFF0284C7),
+          surface: const Color(0xFFF8FAFC),
+          surfaceContainerHighest: const Color(0xFFF1F5F9),
+        ),
+        scaffoldBackgroundColor: const Color(0xFFF8FAFC),
+        appBarTheme: const AppBarTheme(
+          elevation: 0,
+          backgroundColor: Colors.transparent,
+          surfaceTintColor: Colors.transparent,
+          centerTitle: true,
+          titleTextStyle: TextStyle(
+            color: Color(0xFF0F172A),
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+          iconTheme: IconThemeData(color: Color(0xFF0F172A)),
+        ),
+        cardTheme: CardThemeData(
+          elevation: 0,
           margin: EdgeInsets.zero,
           clipBehavior: Clip.antiAlias,
+          color: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+            side: const BorderSide(color: Color(0xFFE2E8F0), width: 1),
+          ),
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            elevation: 0,
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+          ),
+        ),
+        chipTheme: ChipThemeData(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          side: const BorderSide(color: Color(0xFFE2E8F0)),
         ),
       ),
       home: const Directionality(
@@ -978,43 +1018,78 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             if (_busy) const LinearProgressIndicator(),
             if (_busy) const SizedBox(height: 12),
             Container(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
               decoration: BoxDecoration(
-                color: status.enabled
-                    ? scheme.primaryContainer
-                    : scheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(24),
+                gradient: status.enabled
+                    ? const LinearGradient(
+                        colors: [Color(0xFF0F766E), Color(0xFF134E4A)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      )
+                    : null,
+                color: status.enabled ? null : Colors.white,
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(
+                  color: status.enabled ? const Color(0xFF0D9488) : const Color(0xFFE2E8F0),
+                  width: 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: status.enabled
+                        ? const Color(0xFF0F766E).withOpacity(0.18)
+                        : Colors.black.withOpacity(0.02),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
               ),
               child: Row(
                 children: [
-                  Icon(
-                    status.enabled ? Icons.shield : Icons.shield_outlined,
-                    size: 42,
-                    color: status.enabled ? scheme.primary : scheme.outline,
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: status.enabled
+                          ? Colors.white.withOpacity(0.15)
+                          : const Color(0xFFF1F5F9),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      status.enabled ? Icons.shield : Icons.shield_outlined,
+                      size: 26,
+                      color: status.enabled ? Colors.white : scheme.outline,
+                    ),
                   ),
-                  const SizedBox(width: 16),
+                  const SizedBox(width: 14),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           status.enabled ? 'الحماية مفعّلة' : 'الحماية متوقفة',
-                          style: const TextStyle(
-                            fontSize: 20,
+                          style: TextStyle(
+                            fontSize: 18,
                             fontWeight: FontWeight.bold,
+                            color: status.enabled ? Colors.white : const Color(0xFF0F172A),
                           ),
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 3),
                         Text(
                           status.enabled
                               ? 'الوقت يُحتسب بواسطة خدمة Android حتى عند الخروج من التطبيق.'
                               : 'اختر المدة ثم فعّل الحماية.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: status.enabled ? Colors.white70 : const Color(0xFF64748B),
+                          ),
                         ),
                       ],
                     ),
                   ),
                   Switch(
                     value: status.enabled,
+                    activeColor: Colors.white,
+                    activeTrackColor: const Color(0xFF10B981),
                     onChanged: _busy ? null : _setProtection,
                   ),
                 ],
@@ -1033,29 +1108,106 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             const SizedBox(height: 14),
             Card(
               child: Padding(
-                padding: const EdgeInsets.all(22),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
                 child: Column(
                   children: [
-                    Text(
-                        'المدة المعتمدة: ${_durationLabel(status.dailyMinutes)}'),
-                    const SizedBox(height: 10),
-                    Text(
-                      _format(_remainingSeconds),
-                      textDirection: TextDirection.ltr,
-                      style: const TextStyle(
-                        fontSize: 44,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 2,
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        'المدة المعتمدة: ${_durationLabel(status.dailyMinutes)}',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
                     ),
-                    const SizedBox(height: 18),
-                    LinearProgressIndicator(
-                      value: progress,
-                      minHeight: 10,
-                      borderRadius: BorderRadius.circular(10),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      width: 210,
+                      height: 210,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          SizedBox(
+                            width: 200,
+                            height: 200,
+                            child: CircularProgressIndicator(
+                              value: progress,
+                              strokeWidth: 12,
+                              backgroundColor: scheme.surfaceContainerHighest,
+                              color: progress > 0.3
+                                  ? const Color(0xFF0F766E)
+                                  : (progress > 0.1 ? const Color(0xFFF59E0B) : const Color(0xFFEF4444)),
+                              strokeCap: StrokeCap.round,
+                            ),
+                          ),
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                status.enabled
+                                    ? Icons.hourglass_top_rounded
+                                    : Icons.lock_clock_outlined,
+                                size: 28,
+                                color: status.enabled
+                                    ? const Color(0xFF0F766E)
+                                    : scheme.outline,
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _format(_remainingSeconds),
+                                textDirection: TextDirection.ltr,
+                                style: const TextStyle(
+                                  fontSize: 36,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 2,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                status.enabled ? 'الوقت المتبقي' : 'متوقف حالياً',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.history_rounded, size: 16, color: scheme.onSurfaceVariant),
+                        const SizedBox(width: 6),
+                        Text(
+                          'المستخدم اليوم: ${_format(status.usedSeconds)}',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 12),
-                    Text('المستخدم اليوم: ${_format(status.usedSeconds)}'),
+                    LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 6,
+                      borderRadius: BorderRadius.circular(10),
+                      backgroundColor: scheme.surfaceContainerHighest,
+                      color: progress > 0.3
+                          ? const Color(0xFF0F766E)
+                          : (progress > 0.1 ? const Color(0xFFF59E0B) : const Color(0xFFEF4444)),
+                    ),
                   ],
                 ),
               ),

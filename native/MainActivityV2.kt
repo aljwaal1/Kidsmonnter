@@ -98,8 +98,12 @@ private fun Context.isIgnoringBatteryOptimizations(): Boolean =
         .isIgnoringBatteryOptimizations(packageName)
 
 private fun Context.canUseExactWatchdog(): Boolean =
-    Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-        (getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms()
+    try {
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            (getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms()
+    } catch (_: Exception) {
+        false
+    }
 
 // PARENT_PIN_UNINSTALL_GUARD_MARKER
 private fun Context.isUninstallGuardAccessibilityEnabled(): Boolean {
@@ -1796,6 +1800,13 @@ class UninstallGuardAccessibilityService : AccessibilityService() {
         "com.android.permissioncontroller",
         "com.google.android.permissioncontroller",
         "com.huawei.systemmanager",
+        "com.samsung.android.settings",
+        "com.samsung.android.packageinstaller",
+        "com.samsung.android.permissioncontroller",
+        "com.miui.securitycenter",
+        "com.coloros.safecenter",
+        "com.coloros.oppoguardelf",
+        "com.vivo.permissionmanager"
     )
     private var lastGateLaunchElapsedMs = 0L
 
@@ -1803,16 +1814,24 @@ class UninstallGuardAccessibilityService : AccessibilityService() {
         root ?: return ""
         val output = StringBuilder()
         fun visit(node: AccessibilityNodeInfo?, depth: Int) {
-            if (node == null || depth > 18 || output.length > 12000) return
-            node.text?.toString()?.takeIf { it.isNotBlank() }?.let {
-                output.append(' ').append(it)
-            }
-            node.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let {
-                output.append(' ').append(it)
-            }
-            for (index in 0 until node.childCount) visit(node.getChild(index), depth + 1)
+            try {
+                if (node == null || depth > 18 || output.length > 12000) return
+                node.text?.toString()?.takeIf { it.isNotBlank() }?.let {
+                    output.append(' ').append(it)
+                }
+                node.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let {
+                    output.append(' ').append(it)
+                }
+                val count = try { node.childCount } catch (_: Exception) { 0 }
+                for (index in 0 until count) {
+                    val child = try { node.getChild(index) } catch (_: Exception) { null }
+                    visit(child, depth + 1)
+                }
+            } catch (_: Exception) {}
         }
-        visit(root, 0)
+        try {
+            visit(root, 0)
+        } catch (_: Exception) {}
         return output.toString()
     }
 
