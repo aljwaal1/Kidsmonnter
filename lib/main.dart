@@ -13,26 +13,11 @@ void main() {
   runApp(const KidsMonnterApp());
 }
 
-class KidsMonnterApp extends StatelessWidget {
-  const KidsMonnterApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'حارس وقت الأطفال',
 final ThemeData _lightTheme = ThemeData(
   useMaterial3: true,
   brightness: Brightness.light,
-  colorScheme: const ColorScheme(
-    primary: Color(0xFF0F766E),
-    secondary: Color(0xFF0284C7),
-    surface: Color(0xFFF8FAFC),
-    surfaceContainerHighest: Color(0xFFF1F5F9),
-    background: Color(0xFFF8FAFC),
-    onPrimary: Colors.white,
-    onSecondary: Colors.white,
-    onSurface: Color(0xFF0F172A),
+  colorScheme: ColorScheme.fromSeed(
+    seedColor: const Color(0xFF0F766E),
     brightness: Brightness.light,
   ),
   scaffoldBackgroundColor: const Color(0xFFF8FAFC),
@@ -78,15 +63,8 @@ final ThemeData _lightTheme = ThemeData(
 final ThemeData _darkTheme = ThemeData(
   useMaterial3: true,
   brightness: Brightness.dark,
-  colorScheme: const ColorScheme(
-    primary: Color(0xFF00C853),
-    secondary: Color(0xFF004D40),
-    surface: Color(0xFF263238),
-    surfaceContainerHighest: Color(0xFF1E272C),
-    background: Color(0xFF121212),
-    onPrimary: Colors.black,
-    onSecondary: Colors.black,
-    onSurface: Colors.white,
+  colorScheme: ColorScheme.fromSeed(
+    seedColor: const Color(0xFF00C853),
     brightness: Brightness.dark,
   ),
   scaffoldBackgroundColor: const Color(0xFF121212),
@@ -129,9 +107,17 @@ final ThemeData _darkTheme = ThemeData(
   ),
 );
 
-theme: _lightTheme,
-darkTheme: _darkTheme,
-themeMode: ThemeMode.system,
+class KidsMonnterApp extends StatelessWidget {
+  const KidsMonnterApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'حارس وقت الأطفال',
+      theme: _lightTheme,
+      darkTheme: _darkTheme,
+      themeMode: ThemeMode.system,
       home: const Directionality(
         textDirection: TextDirection.rtl,
         child: HomeScreen(),
