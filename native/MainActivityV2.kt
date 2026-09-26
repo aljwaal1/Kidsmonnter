@@ -1806,7 +1806,9 @@ class UninstallGuardAccessibilityService : AccessibilityService() {
         "com.miui.securitycenter",
         "com.coloros.safecenter",
         "com.coloros.oppoguardelf",
-        "com.vivo.permissionmanager"
+        "com.vivo.permissionmanager",
+        "com.realme.securitycenter",
+        "com.oneplus.appmanager"
     )
     private var lastGateLaunchElapsedMs = 0L
 

@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout the repository
+      - uses: actions/checkout@v4
+
+      # Set up Flutter
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      # Get Flutter packages
+      - name: Get packages
+        run: flutter pub get
+
+      # Lint & format check
+      - name: Analyze code
+        run: flutter analyze
+
+      - name: Check formatting
+        run: dart format --set-exit-if-changed .
+
+      # Run widget tests
+      - name: Run tests
+        run: flutter test
+
+      # Build release APK
+      - name: Build APK
+        run: flutter build apk --release
+
+      # Upload APK as artifact
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kidsmonnter-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk

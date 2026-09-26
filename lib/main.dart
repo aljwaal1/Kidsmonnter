@@ -21,55 +21,117 @@ class KidsMonnterApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'حارس وقت الأطفال',
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.light,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF0F766E),
-          primary: const Color(0xFF0F766E),
-          secondary: const Color(0xFF0284C7),
-          surface: const Color(0xFFF8FAFC),
-          surfaceContainerHighest: const Color(0xFFF1F5F9),
-        ),
-        scaffoldBackgroundColor: const Color(0xFFF8FAFC),
-        appBarTheme: const AppBarTheme(
-          elevation: 0,
-          backgroundColor: Colors.transparent,
-          surfaceTintColor: Colors.transparent,
-          centerTitle: true,
-          titleTextStyle: TextStyle(
-            color: Color(0xFF0F172A),
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-          ),
-          iconTheme: IconThemeData(color: Color(0xFF0F172A)),
-        ),
-        cardTheme: CardThemeData(
-          elevation: 0,
-          margin: EdgeInsets.zero,
-          clipBehavior: Clip.antiAlias,
-          color: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
-            side: const BorderSide(color: Color(0xFFE2E8F0), width: 1),
-          ),
-        ),
-        filledButtonTheme: FilledButtonThemeData(
-          style: FilledButton.styleFrom(
-            elevation: 0,
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-          ),
-        ),
-        chipTheme: ChipThemeData(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
-          side: const BorderSide(color: Color(0xFFE2E8F0)),
-        ),
+final ThemeData _lightTheme = ThemeData(
+  useMaterial3: true,
+  brightness: Brightness.light,
+  colorScheme: const ColorScheme(
+    primary: Color(0xFF0F766E),
+    secondary: Color(0xFF0284C7),
+    surface: Color(0xFFF8FAFC),
+    surfaceContainerHighest: Color(0xFFF1F5F9),
+    background: Color(0xFFF8FAFC),
+    onPrimary: Colors.white,
+    onSecondary: Colors.white,
+    onSurface: Color(0xFF0F172A),
+    brightness: Brightness.light,
+  ),
+  scaffoldBackgroundColor: const Color(0xFFF8FAFC),
+  appBarTheme: const AppBarTheme(
+    elevation: 0,
+    backgroundColor: Colors.transparent,
+    surfaceTintColor: Colors.transparent,
+    centerTitle: true,
+    titleTextStyle: TextStyle(
+      color: Color(0xFF0F172A),
+      fontSize: 20,
+      fontWeight: FontWeight.bold,
+    ),
+    iconTheme: IconThemeData(color: Color(0xFF0F172A)),
+  ),
+  cardTheme: CardThemeData(
+    elevation: 0,
+    margin: EdgeInsets.zero,
+    clipBehavior: Clip.antiAlias,
+    color: Colors.white,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(22),
+      side: const BorderSide(color: Color(0xFFE2E8F0), width: 1),
+    ),
+  ),
+  filledButtonTheme: FilledButtonThemeData(
+    style: FilledButton.styleFrom(
+      elevation: 0,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
       ),
+    ),
+  ),
+  chipTheme: ChipThemeData(
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(14),
+    ),
+    side: const BorderSide(color: Color(0xFFE2E8F0)),
+  ),
+);
+
+final ThemeData _darkTheme = ThemeData(
+  useMaterial3: true,
+  brightness: Brightness.dark,
+  colorScheme: const ColorScheme(
+    primary: Color(0xFF00C853),
+    secondary: Color(0xFF004D40),
+    surface: Color(0xFF263238),
+    surfaceContainerHighest: Color(0xFF1E272C),
+    background: Color(0xFF121212),
+    onPrimary: Colors.black,
+    onSecondary: Colors.black,
+    onSurface: Colors.white,
+    brightness: Brightness.dark,
+  ),
+  scaffoldBackgroundColor: const Color(0xFF121212),
+  appBarTheme: const AppBarTheme(
+    elevation: 0,
+    backgroundColor: Colors.transparent,
+    surfaceTintColor: Colors.transparent,
+    centerTitle: true,
+    titleTextStyle: TextStyle(
+      color: Colors.white,
+      fontSize: 20,
+      fontWeight: FontWeight.bold,
+    ),
+    iconTheme: IconThemeData(color: Colors.white),
+  ),
+  cardTheme: CardThemeData(
+    elevation: 0,
+    margin: EdgeInsets.zero,
+    clipBehavior: Clip.antiAlias,
+    color: const Color(0xFF263238),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(22),
+      side: const BorderSide(color: Color(0xFF37474F), width: 1),
+    ),
+  ),
+  filledButtonTheme: FilledButtonThemeData(
+    style: FilledButton.styleFrom(
+      elevation: 0,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+    ),
+  ),
+  chipTheme: ChipThemeData(
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(14),
+    ),
+    side: const BorderSide(color: Color(0xFF37474F)),
+  ),
+);
+
+theme: _lightTheme,
+darkTheme: _darkTheme,
+themeMode: ThemeMode.system,
       home: const Directionality(
         textDirection: TextDirection.rtl,
         child: HomeScreen(),
