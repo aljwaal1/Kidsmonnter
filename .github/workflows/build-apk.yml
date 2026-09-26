@@ -26,8 +26,8 @@ jobs:
       KEY_ALIAS: kidsmonnter
       EXPECTED_CERT_SHA256: 3626d5e77223759fc15f1411c1bc8f96021a07b86eb0a86975083364a6443096
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -36,12 +36,19 @@ jobs:
           channel: stable
           cache: true
       - name: Restore fixed signing key
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .signing/kidsmonnter-release.jks
           key: kidsmonnter-release-keystore-v2
-      - name: Verify signing key
-        run: test -s .signing/kidsmonnter-release.jks
+      - name: Detect signing key
+        run: |
+          if [ -s .signing/kidsmonnter-release.jks ]; then
+            echo "SIGNING_AVAILABLE=true" >> "$GITHUB_ENV"
+            echo "Stable release signing key is available."
+          else
+            echo "SIGNING_AVAILABLE=false" >> "$GITHUB_ENV"
+            echo "::warning::Stable release signing key is unavailable; the workflow will still build the APK but will not publish it as the official signed release."
+          fi
       - name: Generate Android project
         run: flutter create --platforms=android --org com.explapp --no-pub .
       - name: Install parental-control implementation
@@ -118,17 +125,24 @@ jobs:
           flutter clean
           rm -rf android/.gradle
           flutter build apk --release
-      - name: Sign and verify APK
+      - name: Prepare APK artifact
         run: |
           set -euo pipefail
           INPUT_APK=build/app/outputs/flutter-apk/app-release.apk
-          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
           mkdir -p dist
-          "$APKSIGNER" sign --ks .signing/kidsmonnter-release.jks --ks-key-alias "$KEY_ALIAS" --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD --out dist/KidsMonnter.apk "$INPUT_APK"
-          "$APKSIGNER" verify --verbose --print-certs dist/KidsMonnter.apk | tee dist/KidsMonnter-cert.txt
-          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' dist/KidsMonnter-cert.txt
-          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' dist/KidsMonnter-cert.txt
-          grep -qi "$EXPECTED_CERT_SHA256" dist/KidsMonnter-cert.txt
+
+          if [ "${SIGNING_AVAILABLE:-false}" = "true" ]; then
+            APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+            "$APKSIGNER" sign --ks .signing/kidsmonnter-release.jks --ks-key-alias "$KEY_ALIAS" --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD --out dist/KidsMonnter.apk "$INPUT_APK"
+            "$APKSIGNER" verify --verbose --print-certs dist/KidsMonnter.apk | tee dist/KidsMonnter-cert.txt
+            grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' dist/KidsMonnter-cert.txt
+            grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' dist/KidsMonnter-cert.txt
+            grep -qi "$EXPECTED_CERT_SHA256" dist/KidsMonnter-cert.txt
+          else
+            cp "$INPUT_APK" dist/KidsMonnter.apk
+            printf '%s\n' 'Stable release signing key was not available in this run. This artifact is a CI build and is not published as the official APK.' > dist/SIGNING_NOTICE.txt
+          fi
+
           sha256sum dist/KidsMonnter.apk | sed 's#dist/KidsMonnter.apk#KidsMonnter.apk#' > dist/KidsMonnter.sha256
           (cd dist && sha256sum -c KidsMonnter.sha256)
       - name: Upload artifact
@@ -141,6 +155,10 @@ jobs:
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
+          if [ "${SIGNING_AVAILABLE:-false}" != "true" ]; then
+            echo "::warning::Official APK publication skipped because the stable release signing key is unavailable."
+            exit 0
+          fi
           mkdir -p apk
           cp dist/KidsMonnter.apk apk/KidsMonnter.apk
           cp dist/KidsMonnter-cert.txt apk/KidsMonnter-cert.txt
