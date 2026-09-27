@@ -1,0 +1,1 @@
+Verify the Play Protect compatible consumer APK without Accessibility declaration.
